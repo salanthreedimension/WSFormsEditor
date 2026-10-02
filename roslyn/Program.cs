@@ -88,7 +88,7 @@ internal static class Designer
                     controls[name] = NewControl(controlType, name);
                     parents.TryAdd(name, null);
                 }
-                else diagnostics.Add($"Controle '{name}' ({simple}) não é editável no MVP e foi ignorado.");
+                else diagnostics.Add($"Control '{name}' ({simple}) is not supported by the visual editor and was left unchanged.");
                 continue;
             }
 
@@ -117,7 +117,7 @@ internal static class Designer
             if (!TryReadItems(invocation, out var values))
             {
                 opaqueItems.Add(controlName);
-                diagnostics.Add($"Os itens de '{controlName}' usam uma expressão que não pode ser editada; serão preservados.");
+                diagnostics.Add($"Items for '{controlName}' use an unsupported expression and were left unchanged.");
                 continue;
             }
             if (!parsedItems.TryGetValue(controlName, out var items)) parsedItems[controlName] = items = new List<string>();
@@ -134,7 +134,7 @@ internal static class Designer
             var (controlName, eventName) = ControlProperty(assignment.Left);
             if (controlName is null || eventName is null || !controls.TryGetValue(controlName, out var control)) continue;
             var handler = EventHandlerName(assignment.Right);
-            if (string.IsNullOrWhiteSpace(handler)) diagnostics.Add($"O handler de {controlName}.{eventName} não pôde ser representado no Designer.");
+            if (string.IsNullOrWhiteSpace(handler)) diagnostics.Add($"The handler for {controlName}.{eventName} cannot be represented and was left unchanged.");
             else control.events[eventName] = handler;
         }
 
@@ -535,7 +535,7 @@ internal static class Designer
                 "ImageLocation" => SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(ValueString(pair.Value))).ToString(),
                 "Enabled" or "Visible" or "Checked" => bool.TryParse(ValueString(pair.Value), out var enabled) && enabled ? "true" : "false",
                 "BackColor" or "ForeColor" when !string.IsNullOrWhiteSpace(ValueString(pair.Value)) => $"System.Drawing.ColorTranslator.FromHtml({SyntaxFactory.Literal(ValueString(pair.Value)).ToString()})",
-                "TabIndex" => int.TryParse(ValueString(pair.Value), out var tabIndex) && tabIndex >= 0 ? tabIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) : throw new InvalidDataException("TabIndex deve ser um inteiro não negativo."),
+                "TabIndex" => int.TryParse(ValueString(pair.Value), out var tabIndex) && tabIndex >= 0 ? tabIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) : throw new InvalidDataException("TabIndex must be a non-negative integer."),
                 "Anchor" => EnumExpression("System.Windows.Forms.AnchorStyles", ValueString(pair.Value), ["Top", "Bottom", "Left", "Right"]),
                 "Dock" => EnumExpression("System.Windows.Forms.DockStyle", ValueString(pair.Value), ["None", "Top", "Bottom", "Left", "Right", "Fill"]),
                 _ => null
@@ -561,8 +561,8 @@ internal static class Designer
         foreach (var pair in control.events)
         {
             if (string.IsNullOrWhiteSpace(pair.Value)) continue;
-            if (!SyntaxFacts.IsValidIdentifier(pair.Key)) throw new InvalidDataException($"Nome de evento inválido: {pair.Key}");
-            if (!SyntaxFacts.IsValidIdentifier(pair.Value)) throw new InvalidDataException($"Nome de handler inválido: {pair.Value}");
+            if (!SyntaxFacts.IsValidIdentifier(pair.Key)) throw new InvalidDataException($"Invalid event name: {pair.Key}");
+            if (!SyntaxFacts.IsValidIdentifier(pair.Value)) throw new InvalidDataException($"Invalid handler name: {pair.Value}");
             yield return ParseStatement($"this.{control.name}.{pair.Key} += this.{pair.Value};");
         }
     }
@@ -581,7 +581,7 @@ internal static class Designer
         var family = properties.TryGetValue("FontFamily", out var fontFamily) ? ValueString(fontFamily) : "Segoe UI";
         var fontSizeText = properties.TryGetValue("FontSize", out var size) ? ValueString(size) : "9";
         if (!double.TryParse(fontSizeText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var fontSize) || !double.IsFinite(fontSize) || fontSize <= 0)
-            throw new InvalidDataException("FontSize deve ser um número positivo.");
+            throw new InvalidDataException("FontSize must be a positive number.");
         var numericSize = fontSize.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
         return ParseStatement($"{target}.Font = new System.Drawing.Font({SyntaxFactory.Literal(family)}, {numericSize}F, {styleExpression});");
     }

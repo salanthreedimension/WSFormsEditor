@@ -11,29 +11,29 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.commands.registerCommand("winformsDesigner.openDesigner", async (resource?: vscode.Uri) => {
     const source = resource ?? vscode.window.activeTextEditor?.document.uri;
     if (!source || source.fsPath.toLowerCase().endsWith(".designer.cs")) {
-      vscode.window.showWarningMessage("Abra o arquivo .cs do Form ou UserControl para iniciar o Designer.");
+      vscode.window.showWarningMessage("Open a Form or UserControl .cs file to start the designer.");
       return;
     }
 
     const workspace = vscode.workspace.getWorkspaceFolder(source);
     if (!workspace) {
-      vscode.window.showErrorMessage("O arquivo precisa estar dentro de uma pasta de workspace.");
+      vscode.window.showErrorMessage("The file must be inside a workspace folder.");
       return;
     }
     const project = await findWinFormsProject(workspace.uri.fsPath, source.fsPath);
     if (!project) {
-      vscode.window.showErrorMessage("Nenhum projeto .NET com UseWindowsForms=true foi encontrado para este arquivo.");
+      vscode.window.showErrorMessage("No WinForms .NET project was found for this file. Enable UseWindowsForms or target Windows.");
       return;
     }
     const projectPath = project;
 
     const designerPath = source.fsPath.replace(/\.cs$/i, ".Designer.cs");
     if (!(await fileExists(designerPath))) {
-      vscode.window.showErrorMessage(`Arquivo de Designer não encontrado: ${path.basename(designerPath)}`);
+      vscode.window.showErrorMessage(`Designer file not found: ${path.basename(designerPath)}`);
       return;
     }
     if (findOpenDocument(designerPath)?.isDirty) {
-      vscode.window.showWarningMessage("Salve o arquivo .Designer.cs antes de abrir o Designer visual.");
+      vscode.window.showWarningMessage("Save the .Designer.cs file before opening the visual designer.");
       return;
     }
 
@@ -134,15 +134,15 @@ export function activate(context: vscode.ExtensionContext): void {
         const dirtySources = vscode.workspace.textDocuments.filter(document =>
           document.isDirty && document.languageId === "csharp" && path.resolve(document.uri.fsPath).toLowerCase().startsWith(projectDirectory + path.sep));
         if (dirtySources.length > 0) {
-          panel.webview.postMessage({ type: "error", message: "Salve os arquivos C# abertos do projeto antes de executar o Form." });
+          panel.webview.postMessage({ type: "error", message: "Save open C# project files before running the Form." });
           return;
         }
-        panel.webview.postMessage({ type: "native", running: false, building: true, message: "Compilando projeto WinForms..." });
+        panel.webview.postMessage({ type: "native", running: false, building: true, message: "Building WinForms project..." });
         if (buildTimer) clearTimeout(buildTimer);
         const errors = await buildProject(projectPath);
         if (errors.length > 0) {
           panel.webview.postMessage({ type: "build", errors });
-          panel.webview.postMessage({ type: "native", running: false, building: false, message: "Corrija os erros de compilação antes de executar." });
+          panel.webview.postMessage({ type: "native", running: false, building: false, message: "Fix build errors before running the Form." });
           return;
         }
         if (panelDisposed) return;
@@ -159,9 +159,9 @@ export function activate(context: vscode.ExtensionContext): void {
         });
         child.on("close", code => {
           if (nativeProcess === child) nativeProcess = undefined;
-          if (!panelDisposed) panel.webview.postMessage({ type: "native", running: false, message: runtimeOutput.trim() || `Form encerrado (${code ?? "sem código"}).` });
+          if (!panelDisposed) panel.webview.postMessage({ type: "native", running: false, message: runtimeOutput.trim() || `Form exited (${code ?? "no exit code"}).` });
         });
-        panel.webview.postMessage({ type: "native", running: true, message: "Form WinForms em execução" });
+        panel.webview.postMessage({ type: "native", running: true, message: "WinForms Form is running in a native window." });
       }
 
       function stopNativePreview(): void {
@@ -174,7 +174,7 @@ export function activate(context: vscode.ExtensionContext): void {
         nativeProcess = undefined;
       }
     } catch (error) {
-      vscode.window.showErrorMessage(`Não foi possível abrir o Designer: ${errorMessage(error)}`);
+      vscode.window.showErrorMessage(`Could not open the designer: ${errorMessage(error)}`);
     }
   }));
 }
@@ -227,7 +227,7 @@ function buildProject(projectPath: string): Promise<string[]> {
     child.on("error", error => resolve([errorMessage(error)]));
     child.on("close", code => {
       const errors = output.split(/\r?\n/).filter(line => /\berror\s+[A-Z]+\d+:/i.test(line));
-      if (code !== 0 && errors.length === 0) errors.push(`dotnet build terminou com código ${code}.`);
+      if (code !== 0 && errors.length === 0) errors.push(`dotnet build exited with code ${code}.`);
       resolve(errors);
     });
   });
@@ -247,7 +247,7 @@ function runRoslyn(extensionPath: string, operation: "read" | "write", designerP
     child.on("close", (code) => {
       if (code !== 0) { reject(new Error(stderr.trim() || `Roslyn helper exited with code ${code}`)); return; }
       try { resolve(stdout.trim() ? JSON.parse(stdout) as DesignerDocument : { formName: "", controls: [], diagnostics: [] }); }
-      catch (error) { reject(new Error(`Resposta inválida do helper Roslyn: ${errorMessage(error)}\n${stdout}`)); }
+      catch (error) { reject(new Error(`Invalid response from Roslyn helper: ${errorMessage(error)}\n${stdout}`)); }
     });
   });
 }
@@ -258,7 +258,7 @@ async function renderHtml(webview: vscode.Webview, extensionUri: vscode.Uri): Pr
   const css = webview.asWebviewUri(vscode.Uri.joinPath(media, "designer.css"));
   const script = webview.asWebviewUri(vscode.Uri.joinPath(media, "designer.js"));
   const csp = `default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}' ${webview.cspSource}; img-src ${webview.cspSource} data:;`;
-  return `<!doctype html><html lang="pt-BR"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${css}"><title>WinForms Designer</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${css}"><title>WinForms Designer</title></head><body><div id="app"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
 }
 
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

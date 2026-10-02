@@ -21,11 +21,11 @@
   app.innerHTML = `
     <header class="toolbar">
       <span class="brand">WinForms Designer</span><span class="project-name" id="project-name"></span>
-      <button class="tool-action preview-toggle" id="preview" title="Alternar preview interativo">▶</button>
-      <button class="tool-action" id="run-native" title="Compilar e executar o Form real">▷</button>
-      <button class="tool-action" id="stop-native" title="Encerrar o Form" disabled>■</button>
-      <button class="tool-action" id="undo" title="Desfazer (Ctrl+Z)">↶</button>
-      <button class="tool-action" id="redo" title="Refazer (Ctrl+Y)">↷</button>
+      <button class="tool-action preview-toggle" id="preview" title="Toggle interactive preview">▶</button>
+      <button class="tool-action" id="run-native" title="Build and run the native Form">▷</button>
+      <button class="tool-action" id="stop-native" title="Stop the Form" disabled>■</button>
+      <button class="tool-action" id="undo" title="Undo (Ctrl+Z)">↶</button>
+      <button class="tool-action" id="redo" title="Redo (Ctrl+Y)">↷</button>
       <span class="hint">Snap 8px</span>
     </header>
     <main class="layout">
@@ -36,7 +36,7 @@
       <section class="canvas-wrap" id="canvas-wrap"><div class="form-surface" id="form-surface"></div></section>
       <aside class="sidebar rightbar"><div class="section-title">Properties</div><div id="properties" class="properties"></div></aside>
     </main>
-    <footer class="status" id="status"><span class="status-message" id="status-message">Abrindo arquivo...</span><span class="status-actions" id="conflict-actions" hidden><button id="reload-file">Recarregar</button><button id="overwrite-file">Sobrescrever</button></span><span id="status-size"></span></footer>`;
+    <footer class="status" id="status"><span class="status-message" id="status-message">Loading designer...</span><span class="status-actions" id="conflict-actions" hidden><button id="reload-file">Reload</button><button id="overwrite-file">Save and overwrite</button></span><span id="status-size"></span></footer>`;
 
   const surface = document.getElementById("form-surface");
   const canvasWrap = document.getElementById("canvas-wrap");
@@ -80,23 +80,23 @@
       selected.clear(); render();
       const diagnostics = documentModel.diagnostics || [];
       document.getElementById("conflict-actions").hidden = true;
-      setStatus(diagnostics.length ? diagnostics.join(" | ") : "Designer carregado", diagnostics.length > 0);
+      setStatus(diagnostics.length ? diagnostics.join(" | ") : "Designer ready", diagnostics.length > 0);
     } else if (message.type === "conflict") {
       document.getElementById("conflict-actions").hidden = false;
       const detail = message.reason === "buffer"
-        ? "O buffer do Designer.cs tem alterações não salvas. Salve-o ou confirme salvar e sobrescrever."
-        : "O Designer.cs mudou no disco. Recarregue ou confirme a sobrescrita.";
+        ? "The Designer.cs editor buffer has unsaved changes. Save it or confirm Save and overwrite."
+        : "Designer.cs changed on disk. Reload it or confirm Save and overwrite.";
       setStatus(detail, true);
     } else if (message.type === "build") {
       const errors = message.errors || [];
-      setStatus(errors.length ? errors.join(" | ") : "Build do projeto concluído sem erros", errors.length > 0);
+      setStatus(errors.length ? errors.join(" | ") : "Project build succeeded", errors.length > 0);
     } else if (message.type === "native") {
       document.getElementById("run-native").disabled = !!message.running || !!message.building;
       document.getElementById("stop-native").disabled = !message.running;
       if (message.message) setStatus(message.message, false);
     } else if (message.type === "saved") {
       document.getElementById("conflict-actions").hidden = true;
-      setStatus("Todas as alterações foram salvas", false);
+      setStatus("All changes saved", false);
     }
     else if (message.type === "error") setStatus(message.message, true);
   });
@@ -116,7 +116,7 @@
   document.getElementById("preview").addEventListener("click", event => {
     previewMode = !previewMode; selected.clear();
     event.currentTarget.classList.toggle("active", previewMode);
-    event.currentTarget.title = previewMode ? "Voltar ao Designer" : "Alternar preview interativo";
+    event.currentTarget.title = previewMode ? "Return to Designer" : "Toggle interactive preview";
     render();
   });
   document.addEventListener("keydown", onKeyDown);
@@ -141,7 +141,7 @@
   function snap(value) { return Math.max(0, Math.round(value / grid) * grid); }
   function checkpoint() { history.push(JSON.stringify(documentModel)); if (history.length > 100) history.shift(); future = []; }
   function scheduleSave() {
-    setStatus("Salvando Designer.cs...", false);
+    setStatus("Saving Designer.cs...", false);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => vscode.postMessage({ type: "save", document: documentModel }), 300);
   }
@@ -247,7 +247,7 @@
     } else {
       const browserEvents = { Click: "click", DoubleClick: "dblclick", MouseEnter: "mouseenter", MouseLeave: "mouseleave", TextChanged: "input", CheckedChanged: "change", SelectedIndexChanged: "change" };
       Object.entries(control.events || {}).forEach(([name, handler]) => {
-        if (browserEvents[name]) eventTarget.addEventListener(browserEvents[name], () => setStatus(`Evento ${name}: ${handler}`, false));
+        if (browserEvents[name]) eventTarget.addEventListener(browserEvents[name], () => setStatus(`${name} handler: ${handler}`, false));
       });
     }
     if (!previewMode && selected.has(control.name)) {
@@ -280,19 +280,19 @@
   function renderTree() {
     tree.innerHTML = "";
     const form = documentModel.controls.find(item => item.type === "Form") || documentModel.controls[0];
-    const items = [form, ...(form?.children || documentModel.controls.filter(item => item.type !== "Form"))].filter(Boolean);
     const addRow = (control, depth) => {
       const row = document.createElement("div"); row.className = `tree-row${selected.has(control.name) ? " selected" : ""}`; row.style.paddingLeft = `${8 + depth * 15}px`;
       row.innerHTML = `<span class="tree-icon">${control.type === "Form" ? "▱" : "▪"}</span><span>${escapeHtml(control.name)}</span>`;
       row.addEventListener("click", () => { selected = new Set([control.name]); render(); }); tree.append(row);
       (control.children || []).forEach(child => addRow(child, depth + 1));
     };
-    items.forEach(item => addRow(item, 0));
+    if (form) addRow(form, 0);
+    else documentModel.controls.forEach(item => addRow(item, 0));
   }
   function renderProperties() {
     properties.innerHTML = "";
     const control = find([...selected][0]);
-    if (!control) { properties.innerHTML = '<div class="empty">Selecione um controle para editar suas propriedades.</div>'; return; }
+    if (!control) { properties.innerHTML = '<div class="empty">Select a control to edit its properties.</div>'; return; }
     const addGroup = title => { const group = document.createElement("div"); group.className = "property-group"; group.textContent = title; properties.append(group); };
     const addField = (label, value, key, numeric = false) => {
       const row = document.createElement("div"); row.className = "property-row";

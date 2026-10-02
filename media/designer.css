@@ -91,4 +91,12 @@ button:hover { border-color: var(--accent); }
 .status-actions[hidden] { display: none; }
 .status.error { color: #ff8585; }
 .empty { padding: 12px; color: var(--muted); font-size: 12px; }
-@media (max-width: 850px) { .layout { grid-template-columns: 145px minmax(220px, 1fr) 210px; } .canvas-wrap { padding: 20px; } }
+@media (max-width: 850px) {
+  .layout { grid-template-columns: 154px minmax(280px, 1fr) 220px; }
+  .canvas-wrap { padding: 20px; }
+  .tool-list { grid-template-columns: 1fr; gap: 3px; }
+  .tool { min-height: 27px; padding: 4px 6px; }
+  .property-row { grid-template-columns: 76px minmax(0, 1fr); gap: 5px; }
+  .property-row label { overflow: hidden; text-overflow: ellipsis; }
+  .property-row input, .property-row select, .property-row textarea { font-size: 11px; }
+}
