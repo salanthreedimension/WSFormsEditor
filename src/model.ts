@@ -4,6 +4,8 @@ export interface DesignerControl {
   type: ControlType;
   name: string;
   properties: Record<string, string | number | boolean>;
+  managedProperties: string[];
+  events: Record<string, string>;
   children: DesignerControl[];
   parent: string | null;
   location: { x: number; y: number };
@@ -18,7 +20,8 @@ export interface DesignerDocument {
 
 export type DesignerMessage =
   | { type: "ready" }
-  | { type: "save"; document: DesignerDocument }
+  | { type: "save"; document: DesignerDocument; force?: boolean }
+  | { type: "reload" }
   | { type: "selectFile" }
   | { type: "error"; message: string };
 

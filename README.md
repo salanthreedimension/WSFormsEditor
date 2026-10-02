@@ -1,6 +1,6 @@
 # WinForms Visual Designer for VS Code
 
-Extensão experimental para criar e editar a interface de projetos Windows Forms no VS Code Desktop. O MVP oferece toolbox (Form, Panel, Button, Label e TextBox), canvas com seleção/movimentação/redimensionamento em grade de 8 px, árvore de controles, propriedades, salvamento automático e undo/redo.
+Extensão experimental para criar e editar a interface de projetos Windows Forms no VS Code Desktop. O Designer oferece toolbox (Form, Panel, Button, Label e TextBox), canvas com seleção/movimentação, oito alças de resize, snap e guias de alinhamento, preview interativo com elementos HTML nativos, árvore de controles, PropertyGrid, undo/redo e salvamento automático.
 
 ## Executar em desenvolvimento
 
@@ -18,7 +18,7 @@ O helper Roslyn é executado com `dotnet run` e pode restaurar `Microsoft.CodeAn
 - `roslyn/`: helper .NET que analisa `InitializeComponent` com Roslyn e atualiza sintaticamente campos, inicializações, propriedades visuais e `Controls.Add`.
 - `samples/WinFormsSample/`: Form de teste com código de evento manual.
 
-O helper preserva assignments não gerenciados, incluindo handlers, e não reescreve o arquivo inteiro com formatação normalizada. O modelo atual edita `Location`, `Size`, `Text`, `BackColor`, `Enabled` e `Visible`; controles existentes de tipos ainda não suportados permanecem no código e aparecem como diagnósticos. A leitura externa do `.Designer.cs` ocorre ao abrir o Designer; alterações feitas no editor C# enquanto o painel já está aberto ainda não são recarregadas automaticamente.
+O helper usa Roslyn para preservar assignments não gerenciados e handlers, atualizar propriedades de layout/cores/fontes e editar o evento `Click` sem substituir o método associado. Ele reconhece tanto corpos em bloco quanto inicializadores expression-bodied diretos. O host detecta projetos `net*-windows` com controles WinForms mesmo quando `UseWindowsForms` vem de configuração importada, detecta alterações no arquivo em disco antes de salvar, permite recarregar ou confirmar sobrescrita, e executa `dotnet build` para mostrar erros. Controles existentes de tipos ainda não suportados permanecem no código e aparecem como diagnósticos.
 
 ## Empacotar
 
@@ -26,4 +26,4 @@ Execute `npm run package` para gerar o VSIX. Para instalar, use **Extensions: In
 
 ## Limites atuais
 
-O MVP não executa o Form dentro do Webview: o canvas é uma representação visual aproximada. Ainda não há suporte a eventos editáveis, anchors/dock, fontes, guias de alinhamento, resize em oito handles, resolução de conflitos de edição simultânea ou importação de todos os tipos de expressão C# para cor/fonte. Os arquivos WinForms devem ter um `InitializeComponent()` em bloco e o `.csproj` deve declarar `<UseWindowsForms>true</UseWindowsForms>`.
+O preview usa controles HTML do Webview e não executa assemblies WinForms nem código C#; `Click` é editável e exibido no preview, mas o handler C# não é executado dentro dele. Permanecem fora do MVP a edição de eventos além de `Click`, a interpretação de todas as expressões C# possíveis (por exemplo, recursos e inicializadores complexos) e a prevenção de conflito com alterações ainda não salvas no buffer do editor. O projeto precisa compilar como WinForms para que o helper possa validar o resultado.
