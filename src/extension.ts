@@ -1,6 +1,10 @@
+/// <reference types="node" />
+
 import * as vscode from "vscode";
-import * as path from "node:path";
-import { spawn } from "node:child_process";
+import * as path from "path";
+import { spawn } from "child_process";
+import { clearTimeout, setTimeout } from "timers";
+import { createHash } from "crypto";
 import { DesignerDocument, DesignerMessage } from "./model";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -21,6 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showErrorMessage("Nenhum projeto .NET com UseWindowsForms=true foi encontrado para este arquivo.");
       return;
     }
+    const projectPath = project;
 
     const designerPath = source.fsPath.replace(/\.cs$/i, ".Designer.cs");
     if (!(await fileExists(designerPath))) {
@@ -37,20 +42,30 @@ export function activate(context: vscode.ExtensionContext): void {
       panel.webview.html = await renderHtml(panel.webview, context.extensionUri);
       let saveQueue: Promise<void> = Promise.resolve();
       let suppressDesignerWatchUntil = 0;
+      let lastDesignerHash = "";
+      let buildTimer: ReturnType<typeof setTimeout> | undefined;
       panel.webview.onDidReceiveMessage(async (message: DesignerMessage) => {
         if (message.type === "ready") {
-          try {
-            const document = await runRoslyn(context.extensionPath, "read", designerPath);
-            panel.webview.postMessage({ type: "load", document, project: path.basename(project) });
-          } catch (error) {
-            panel.webview.postMessage({ type: "error", message: errorMessage(error) });
-          }
+          await loadDesigner();
+        } else if (message.type === "reload") {
+          await loadDesigner();
         } else if (message.type === "save") {
           saveQueue = saveQueue.then(async () => {
             try {
+              const currentHash = await fileHash(designerPath);
+              if (!message.force && lastDesignerHash && currentHash !== lastDesignerHash) {
+                panel.webview.postMessage({ type: "conflict" });
+                return;
+              }
               suppressDesignerWatchUntil = Date.now() + 1500;
               await runRoslyn(context.extensionPath, "write", designerPath, JSON.stringify(message.document));
+              lastDesignerHash = await fileHash(designerPath);
               panel.webview.postMessage({ type: "saved" });
+              if (buildTimer) clearTimeout(buildTimer);
+              buildTimer = setTimeout(async () => {
+                const errors = await buildProject(projectPath);
+                panel.webview.postMessage({ type: "build", errors });
+              }, 900);
             } catch (error) {
               panel.webview.postMessage({ type: "error", message: errorMessage(error) });
             }
@@ -64,14 +79,28 @@ export function activate(context: vscode.ExtensionContext): void {
         if (reloadTimer) clearTimeout(reloadTimer);
         reloadTimer = setTimeout(async () => {
           try {
-            const document = await runRoslyn(context.extensionPath, "read", designerPath);
-            panel.webview.postMessage({ type: "load", document, project: path.basename(project) });
+            const changedHash = await fileHash(designerPath);
+            if (lastDesignerHash && changedHash !== lastDesignerHash) panel.webview.postMessage({ type: "conflict" });
           } catch (error) {
             panel.webview.postMessage({ type: "error", message: errorMessage(error) });
           }
         }, 300);
       });
-      panel.onDidDispose(() => { watcher.dispose(); if (reloadTimer) clearTimeout(reloadTimer); });
+      panel.onDidDispose(() => {
+        watcher.dispose();
+        if (reloadTimer) clearTimeout(reloadTimer);
+        if (buildTimer) clearTimeout(buildTimer);
+      });
+
+      async function loadDesigner(): Promise<void> {
+        try {
+          const document = await runRoslyn(context.extensionPath, "read", designerPath);
+          lastDesignerHash = await fileHash(designerPath);
+          panel.webview.postMessage({ type: "load", document, project: path.basename(projectPath) });
+        } catch (error) {
+          panel.webview.postMessage({ type: "error", message: errorMessage(error) });
+        }
+      }
     } catch (error) {
       vscode.window.showErrorMessage(`Não foi possível abrir o Designer: ${errorMessage(error)}`);
     }
@@ -89,7 +118,15 @@ async function findWinFormsProject(root: string, source: string): Promise<string
     const projectDirectory = path.dirname(projectPath).toLowerCase();
     if (!directory.startsWith(projectDirectory)) continue;
     const content = await vscode.workspace.fs.readFile(uri);
-    if (/<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(Buffer.from(content).toString("utf8"))) matches.push(projectPath);
+    const projectText = Buffer.from(content).toString("utf8");
+    const explicitWinForms = /<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(projectText);
+    const windowsTarget = /<TargetFrameworks?>\s*[^<]*-windows[^<]*<\/TargetFrameworks?>/i.test(projectText);
+    const designerPath = source.replace(/\.cs$/i, ".Designer.cs");
+    const designerText = await fileExists(designerPath)
+      ? Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(designerPath))).toString("utf8")
+      : "";
+    const hasWinFormsTypes = /System\.Windows\.Forms|:\s*(?:Form|UserControl)\b/.test(designerText);
+    if (explicitWinForms || (windowsTarget && hasWinFormsTypes)) matches.push(projectPath);
   }
   return matches.sort((a, b) => b.length - a.length)[0];
 }
@@ -97,6 +134,26 @@ async function findWinFormsProject(root: string, source: string): Promise<string
 async function fileExists(filePath: string): Promise<boolean> {
   try { await vscode.workspace.fs.stat(vscode.Uri.file(filePath)); return true; }
   catch { return false; }
+}
+
+async function fileHash(filePath: string): Promise<string> {
+  const content = await vscode.workspace.fs.readFile(vscode.Uri.file(filePath));
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function buildProject(projectPath: string): Promise<string[]> {
+  return new Promise(resolve => {
+    const child = spawn("dotnet", ["build", projectPath, "--nologo", "--verbosity", "minimal"], { cwd: path.dirname(projectPath), windowsHide: true });
+    let output = "";
+    child.stdout.setEncoding("utf8").on("data", (part: string) => { output += part; });
+    child.stderr.setEncoding("utf8").on("data", (part: string) => { output += part; });
+    child.on("error", error => resolve([errorMessage(error)]));
+    child.on("close", code => {
+      const errors = output.split(/\r?\n/).filter(line => /\berror\s+[A-Z]+\d+:/i.test(line));
+      if (code !== 0 && errors.length === 0) errors.push(`dotnet build terminou com código ${code}.`);
+      resolve(errors);
+    });
+  });
 }
 
 function runRoslyn(extensionPath: string, operation: "read" | "write", designerPath: string, payload?: string): Promise<DesignerDocument> {
