@@ -1,0 +1,35 @@
+{
+  "name": "winforms-visual-designer",
+  "displayName": "WinForms Visual Designer",
+  "description": "Visual Windows Forms designer for VS Code, backed by Roslyn.",
+  "version": "0.1.0",
+  "publisher": "local-dev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/salanthreedimension/WSFormsEditor.git"
+  },
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onCommand:winformsDesigner.openDesigner"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [{ "command": "winformsDesigner.openDesigner", "title": "WinForms: Open Visual Designer" }],
+    "menus": {
+      "editor/title": [{ "command": "winformsDesigner.openDesigner", "when": "resourceExtname == .cs", "group": "navigation" }],
+      "explorer/context": [{ "command": "winformsDesigner.openDesigner", "when": "resourceExtname == .cs", "group": "navigation" }]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "test": "npm run compile && node --test",
+    "package": "npm run compile && vsce package --allow-missing-repository --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.3.2",
+    "typescript": "^5.8.3"
+  }
+}
