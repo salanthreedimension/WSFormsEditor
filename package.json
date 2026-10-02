@@ -3,7 +3,7 @@
   "displayName": "WinForms Visual Designer",
   "description": "Visual Windows Forms designer for VS Code, backed by Roslyn.",
   "version": "0.1.0",
-  "publisher": "local-dev",
+  "publisher": "salanthreedimension",
   "license": "MIT",
   "repository": {
     "type": "git",
