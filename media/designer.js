@@ -52,6 +52,7 @@
     button.draggable = true;
     button.addEventListener("dragstart", event => event.dataTransfer?.setData("application/x-winforms-control", type));
     button.addEventListener("click", () => {
+      if (documentModel?.canAddControls === false) return;
       if (type === "Form") {
         const root = documentModel?.controls.find(item => item.type === "Form");
         if (root) { selected = new Set([root.name]); render(); }
@@ -62,7 +63,7 @@
   canvasWrap.addEventListener("dragover", event => { if (Array.from(event.dataTransfer?.types || []).includes("application/x-winforms-control")) event.preventDefault(); });
   canvasWrap.addEventListener("drop", event => {
     const type = event.dataTransfer?.getData("application/x-winforms-control");
-    if (!type || type === "Form" || previewMode) return;
+    if (!type || type === "Form" || previewMode || documentModel?.canAddControls === false) return;
     event.preventDefault();
     const dropTarget = event.target instanceof Element ? event.target.closest(".control.panel, .control.groupbox, .control.tabcontrol") : null;
     const container = dropTarget ? find(dropTarget.dataset.name) : null;
@@ -80,15 +81,25 @@
       const diagnostics = documentModel.diagnostics || [];
       const readOnly = documentModel.readOnly === true;
       app.classList.toggle("read-only", readOnly);
+      app.classList.toggle("limited-edit", !readOnly && (documentModel.canAddControls === false || documentModel.canRemoveControls === false));
+      toolbox.querySelectorAll("button").forEach(button => { button.disabled = documentModel.canAddControls === false; button.draggable = documentModel.canAddControls !== false; });
       const notice = document.getElementById("readonly-notice");
-      notice.hidden = !readOnly;
-      notice.textContent = diagnostics.join(" | ");
+      const procedural = documentModel.layoutMode === "procedural";
+      notice.hidden = !readOnly && !procedural;
+      notice.textContent = readOnly
+        ? diagnostics.join(" | ")
+        : "C#-built layout detected. Recognized controls can be edited; adding/removing controls and unrecognized code are left untouched.";
       selected = readOnly
         ? new Set([documentModel.controls.find(item => item.type === "Form")?.name || documentModel.formName])
         : new Set();
       render();
       document.getElementById("conflict-actions").hidden = true;
-      setStatus(diagnostics.length ? diagnostics.join(" | ") : "Designer ready", diagnostics.length > 0);
+      setStatus(
+        procedural && !readOnly
+          ? "C#-built layout detected; unsupported controls remain unchanged"
+          : diagnostics.length ? diagnostics.join(" | ") : "Designer ready",
+        readOnly || (!procedural && diagnostics.length > 0)
+      );
     } else if (message.type === "conflict") {
       document.getElementById("conflict-actions").hidden = false;
       const detail = message.reason === "buffer"
@@ -344,7 +355,7 @@
     }
     addGroup("Appearance"); addColor("BackColor", "BackColor"); addColor("ForeColor", "ForeColor");
     if (control.type === "PictureBox") addField("ImageLocation", control.properties?.ImageLocation ?? "", "ImageLocation");
-    if (["ComboBox", "ListBox"].includes(control.type)) addTextArea("Items", controlItems(control).join("\n"), "Items");
+    if (["ComboBox", "ListBox"].includes(control.type) && documentModel.canEditItems !== false) addTextArea("Items", controlItems(control).join("\n"), "Items");
     addField("Font family", control.properties?.FontFamily ?? "Segoe UI", "FontFamily");
     addField("Font size", control.properties?.FontSize ?? 9, "FontSize", true);
     ["FontBold", "FontItalic", "FontUnderline", "FontStrikeout"].forEach(key => {
@@ -442,9 +453,9 @@
     if (event.ctrlKey && key === "z") { event.preventDefault(); undo(); }
     else if (event.ctrlKey && (key === "y" || (event.shiftKey && key === "z"))) { event.preventDefault(); redo(); }
     else if (event.ctrlKey && key === "c") { clipboard = [...selected].map(name => JSON.parse(JSON.stringify(find(name)))); }
-    else if (event.ctrlKey && key === "v" && clipboard.length) clipboard.forEach(item => { item.name = ""; item.location.x += grid; item.location.y += grid; addControl(item.type, item); });
-    else if (event.ctrlKey && key === "d" && selected.size) { event.preventDefault(); const item = JSON.parse(JSON.stringify(find([...selected][0]))); item.name = ""; item.location.x += grid; item.location.y += grid; addControl(item.type, item); }
-    else if ((key === "delete" || key === "backspace") && selected.size) {
+    else if (event.ctrlKey && key === "v" && clipboard.length && documentModel?.canAddControls !== false) clipboard.forEach(item => { item.name = ""; item.location.x += grid; item.location.y += grid; addControl(item.type, item); });
+    else if (event.ctrlKey && key === "d" && selected.size && documentModel?.canAddControls !== false) { event.preventDefault(); const item = JSON.parse(JSON.stringify(find([...selected][0]))); item.name = ""; item.location.x += grid; item.location.y += grid; addControl(item.type, item); }
+    else if ((key === "delete" || key === "backspace") && selected.size && documentModel?.canRemoveControls !== false) {
       checkpoint(); const remove = (items) => { for (let i = items.length - 1; i >= 0; i--) { if (items[i].type !== "Form" && selected.has(items[i].name)) items.splice(i, 1); else remove(items[i].children || []); } };
       remove(documentModel.controls); selected.clear(); render(); scheduleSave();
     }

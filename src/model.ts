@@ -18,6 +18,12 @@ export interface DesignerDocument {
   controls: DesignerControl[];
   diagnostics: string[];
   readOnly?: boolean;
+  layoutMode?: "procedural";
+  layoutSource?: "codeBehind";
+  layoutMethods?: string[];
+  canAddControls?: boolean;
+  canRemoveControls?: boolean;
+  canEditItems?: boolean;
 }
 
 export type DesignerMessage =

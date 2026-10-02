@@ -19,14 +19,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const formPath = selectedDesignerFile ? source.fsPath.replace(/\.Designer\.cs$/i, ".cs") : source.fsPath;
     let designerPath = selectedDesignerFile ? source.fsPath : formPath.replace(/\.cs$/i, ".Designer.cs");
     if (!(await fileExists(designerPath))) {
-      if (selectedDesignerFile || !(await containsInitializeComponent(formPath))) {
-        vscode.window.showErrorMessage(`Designer file not found: ${path.basename(designerPath)}. A single-file Form must declare InitializeComponent().`);
+      if (selectedDesignerFile || !(await containsSupportedLayout(formPath))) {
+        vscode.window.showErrorMessage(`Designer file not found: ${path.basename(designerPath)}. The Form must contain InitializeComponent() or recognizable WinForms control creation and Controls.Add code.`);
         return;
       }
       designerPath = formPath;
     }
-    if (findOpenDocument(designerPath)?.isDirty) {
-      vscode.window.showWarningMessage("Save the layout file before opening the visual designer.");
+    if (findOpenDocument(designerPath)?.isDirty || (designerPath.toLowerCase() !== formPath.toLowerCase() && findOpenDocument(formPath)?.isDirty)) {
+      vscode.window.showWarningMessage("Save the Form and layout files before opening the visual designer.");
       return;
     }
 
@@ -53,6 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
       let suppressDesignerWatchUntil = 0;
       let lastDesignerHash = "";
       let designerReadOnly = false;
+      let activeLayoutPath = designerPath;
       let buildTimer: ReturnType<typeof setTimeout> | undefined;
       let nativeProcess: ChildProcess | undefined;
       let panelDisposed = false;
@@ -60,7 +61,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (message.type === "ready") {
           await loadDesigner();
         } else if (message.type === "reload") {
-          if (findOpenDocument(designerPath)?.isDirty) panel.webview.postMessage({ type: "conflict", reason: "buffer" });
+          if (findOpenDocument(activeLayoutPath)?.isDirty) panel.webview.postMessage({ type: "conflict", reason: "buffer" });
           else await loadDesigner();
         } else if (message.type === "run") {
           await runNativePreview();
@@ -70,24 +71,24 @@ export function activate(context: vscode.ExtensionContext): void {
           saveQueue = saveQueue.then(async () => {
             try {
               if (designerReadOnly) {
-                panel.webview.postMessage({ type: "error", message: "This form is built dynamically outside InitializeComponent(); visual changes cannot be saved safely." });
+                panel.webview.postMessage({ type: "error", message: "The layout contains UI construction patterns that cannot be edited safely." });
                 return;
               }
-              const openDesigner = findOpenDocument(designerPath);
+              const openDesigner = findOpenDocument(activeLayoutPath);
               if (openDesigner?.isDirty) {
                 if (!message.force) { panel.webview.postMessage({ type: "conflict", reason: "buffer" }); return; }
                 suppressDesignerWatchUntil = Date.now() + 1500;
                 const saved = await vscode.workspace.save(openDesigner.uri);
                 if (!saved) { panel.webview.postMessage({ type: "conflict", reason: "buffer" }); return; }
               }
-              const currentHash = await fileHash(designerPath);
+              const currentHash = await fileHash(activeLayoutPath);
               if (!message.force && lastDesignerHash && currentHash !== lastDesignerHash) {
                 panel.webview.postMessage({ type: "conflict" });
                 return;
               }
               suppressDesignerWatchUntil = Date.now() + 1500;
-              await runRoslyn(context.extensionPath, "write", designerPath, JSON.stringify(message.document));
-              lastDesignerHash = await fileHash(designerPath);
+              await runRoslyn(context.extensionPath, "write", activeLayoutPath, JSON.stringify(message.document));
+              lastDesignerHash = await fileHash(activeLayoutPath);
               panel.webview.postMessage({ type: "saved" });
               if (buildTimer) clearTimeout(buildTimer);
               buildTimer = setTimeout(async () => {
@@ -100,27 +101,33 @@ export function activate(context: vscode.ExtensionContext): void {
           });
         }
       }, undefined, context.subscriptions);
-      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(path.dirname(designerPath), path.basename(designerPath)));
+      const watchedPaths = [...new Set([designerPath, formPath].map(filePath => path.resolve(filePath).toLowerCase()))]
+        .map(filePath => filePath === path.resolve(designerPath).toLowerCase() ? designerPath : formPath);
+      const watchers = watchedPaths.map(filePath =>
+        vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath))));
       let reloadTimer: ReturnType<typeof setTimeout> | undefined;
       const bufferListener = vscode.workspace.onDidChangeTextDocument(event => {
-        if (path.resolve(event.document.uri.fsPath).toLowerCase() === path.resolve(designerPath).toLowerCase() && event.document.isDirty)
+        if (path.resolve(event.document.uri.fsPath).toLowerCase() === path.resolve(activeLayoutPath).toLowerCase() && event.document.isDirty)
           panel.webview.postMessage({ type: "conflict", reason: "buffer" });
       });
-      watcher.onDidChange(() => {
-        if (Date.now() < suppressDesignerWatchUntil) return;
+      const onLayoutChanged = (event: vscode.Uri): void => {
+        if (path.resolve(event.fsPath).toLowerCase() !== path.resolve(activeLayoutPath).toLowerCase() || Date.now() < suppressDesignerWatchUntil) return;
         if (reloadTimer) clearTimeout(reloadTimer);
         reloadTimer = setTimeout(async () => {
           try {
-            const changedHash = await fileHash(designerPath);
+            const changedHash = await fileHash(activeLayoutPath);
             if (lastDesignerHash && changedHash !== lastDesignerHash) panel.webview.postMessage({ type: "conflict" });
           } catch (error) {
             panel.webview.postMessage({ type: "error", message: errorMessage(error) });
           }
         }, 300);
-      });
+      };
+      for (const watcher of watchers) {
+        watcher.onDidChange(onLayoutChanged);
+      }
       panel.onDidDispose(() => {
         panelDisposed = true;
-        watcher.dispose();
+        for (const watcher of watchers) watcher.dispose();
         bufferListener.dispose();
         if (reloadTimer) clearTimeout(reloadTimer);
         if (buildTimer) clearTimeout(buildTimer);
@@ -129,10 +136,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
       async function loadDesigner(): Promise<void> {
         try {
-          const codeBehindPath = designerPath.toLowerCase() === formPath.toLowerCase() || !(await fileExists(formPath)) ? undefined : formPath;
+          const codeBehindPath = await fileExists(formPath) ? formPath : undefined;
           const document = await runRoslyn(context.extensionPath, "read", designerPath, undefined, codeBehindPath);
+          activeLayoutPath = document.layoutSource === "codeBehind" ? formPath : designerPath;
+          if (findOpenDocument(activeLayoutPath)?.isDirty) {
+            panel.webview.postMessage({ type: "error", message: "Save the file containing the detected layout code, then reload the designer." });
+            return;
+          }
           designerReadOnly = document.readOnly === true;
-          lastDesignerHash = await fileHash(designerPath);
+          lastDesignerHash = await fileHash(activeLayoutPath);
           panel.webview.postMessage({ type: "load", document, project: path.basename(projectPath) });
         } catch (error) {
           panel.webview.postMessage({ type: "error", message: errorMessage(error) });
@@ -214,11 +226,12 @@ async function findWinFormsProject(root: string, source: string, designerPath: s
   return matches.sort((a, b) => b.length - a.length)[0];
 }
 
-async function containsInitializeComponent(filePath: string): Promise<boolean> {
+async function containsSupportedLayout(filePath: string): Promise<boolean> {
   try {
     const openDocument = findOpenDocument(filePath);
     const source = openDocument?.getText() ?? Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(filePath))).toString("utf8");
-    return /\bInitializeComponent\s*\([^)]*\)\s*(?:\{|=>)/s.test(source);
+    return /\bInitializeComponent\s*\([^)]*\)\s*(?:\{|=>)/s.test(source) ||
+      /\b(?:new\s+(?:System\.Windows\.Forms\.)?(?:Panel|Button|Label|TextBox|RichTextBox|CheckBox|RadioButton|ComboBox|ListBox|PictureBox|GroupBox|TabControl|DataGridView)\b[\s({]|Controls\s*\.\s*Add\s*\()/s.test(source);
   } catch (error) {
     if (isFileNotFound(error)) return false;
     throw error;

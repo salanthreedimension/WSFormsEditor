@@ -159,7 +159,7 @@ test("Roslyn edits a layout stored in the Form.cs file", async () => {
   }
 });
 
-test("Roslyn identifies custom-built forms as read-only instead of returning a misleading blank layout", async () => {
+test("Roslyn edits mapped controls while preserving unsupported inline controls", async () => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-custom-layout-test-"));
   try {
     const designer = path.join(temporaryRoot, "Form1.Designer.cs");
@@ -175,20 +175,143 @@ test("Roslyn identifies custom-built forms as read-only instead of returning a m
     });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const model = JSON.parse(result.stdout);
-    assert.equal(model.readOnly, true);
+    assert.equal(model.readOnly, false);
+    assert.equal(model.controls[0].children.length, 1);
     assert.equal(model.controls[0].size.width, 1180);
     assert.equal(model.controls[0].size.height, 750);
     assert.equal(model.controls[0].properties.Text, "Custom form");
-    assert.match(model.diagnostics.join(" "), /creates its controls in custom code outside InitializeComponent/);
+    assert.equal(model.canAddControls, false);
+    assert.equal(model.canRemoveControls, false);
+    assert.match(model.diagnostics.join(" "), /inline control could not be named/);
 
-    const write = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", designer], {
+    model.controls[0].properties.Text = "Updated custom form";
+    assert.ok(model.controls[0].managedProperties.includes("Text"));
+    model.controls[0].children[0].location = { x: 80, y: 92 };
+    model.controls[0].children[0].managedProperties.push("Location");
+    const write = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", codeBehind], {
       cwd: root,
       input: JSON.stringify(model),
       encoding: "utf8"
     });
-    assert.notEqual(write.status, 0);
-    assert.match(write.stderr, /cannot be safely edited by the visual designer/);
+    assert.equal(write.status, 0, write.stderr || write.stdout);
+    const updatedCodeBehind = await readFile(codeBehind, "utf8");
+    assert.match(updatedCodeBehind, /this\.Text = "Updated custom form"/);
+    assert.match(updatedCodeBehind, /Location = new System\.Drawing\.Point\(80, 92\)/);
+    assert.match(updatedCodeBehind, /Controls\.Add\(new System\.Windows\.Forms\.Button\(\)\)/);
     assert.equal(await readFile(designer, "utf8"), designerSource);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Roslyn edits recognized local controls in a custom method without requiring InitializeComponent", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-procedural-edit-test-"));
+  try {
+    const form = path.join(temporaryRoot, "Form1.cs");
+    const source = `using System.Drawing;\nusing System.Windows.Forms;\npartial class Form1 : Form\n{\n    private void BuildVisualTree()\n    {\n        this.Text = "Before";\n        var panel = new Panel { Location = new Point(8, 16), Size = new Size(300, 200) };\n        var button = new Button { Name = "actionButton", Text = "Before", Location = new Point(24, 32), Size = new Size(100, 30) };\n        panel.Controls.Add(button);\n        this.Controls.Add(panel);\n    }\n}\n`;
+    await writeFile(form, source);
+    const result = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "read", form, form], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const model = JSON.parse(result.stdout);
+    assert.equal(model.readOnly, false);
+    assert.equal(model.layoutMode, "procedural");
+    assert.equal(model.layoutSource, "codeBehind");
+    assert.deepEqual(model.layoutMethods, ["BuildVisualTree"]);
+    assert.equal(model.controls[0].children[0].name, "panel");
+    assert.equal(model.controls[0].children[0].children[0].name, "button");
+    assert.equal(model.controls[0].children[0].children[0].properties.Text, "Before");
+
+    const button = model.controls[0].children[0].children[0];
+    button.properties.Text = "Updated";
+    button.managedProperties.push("Text");
+    button.location = { x: 56, y: 64 };
+    button.managedProperties.push("Location");
+    button.events.Click = "button_Click";
+    const write = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", form], {
+      cwd: root,
+      input: JSON.stringify(model),
+      encoding: "utf8"
+    });
+    assert.equal(write.status, 0, write.stderr || write.stdout);
+    const updated = await readFile(form, "utf8");
+    assert.match(updated, /Text = "Updated"/);
+    assert.match(updated, /Location = new System\.Drawing\.Point\(56, 64\)/);
+    assert.match(updated, /button\.Click \+= this\.button_Click;/);
+    assert.match(updated, /private void BuildVisualTree\(\)/);
+    assert.doesNotMatch(updated, /InitializeComponent/);
+
+    button.events.Click = "";
+    const secondWrite = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", form], {
+      cwd: root,
+      input: JSON.stringify(model),
+      encoding: "utf8"
+    });
+    assert.equal(secondWrite.status, 0, secondWrite.stderr || secondWrite.stdout);
+    const savedAgain = await readFile(form, "utf8");
+    assert.doesNotMatch(savedAgain, /button\.Click \+= this\.button_Click;/);
+    assert.match(savedAgain, /Text = "Updated"/);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Roslyn writes recognized procedural layouts to the code-behind partial file", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-procedural-split-test-"));
+  try {
+    const designer = path.join(temporaryRoot, "Form1.Designer.cs");
+    const codeBehind = path.join(temporaryRoot, "Form1.cs");
+    const designerSource = `namespace SplitProceduralSample;\npartial class Form1 : System.Windows.Forms.Form\n{\n    private void InitializeComponent() { this.ClientSize = new System.Drawing.Size(600, 400); }\n}\n`;
+    const codeBehindSource = `namespace SplitProceduralSample;\npartial class Form1\n{\n    private void Compose()\n    {\n        var panel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(12, 20) };\n        this.Controls.Add(panel);\n    }\n}\n`;
+    await writeFile(designer, designerSource);
+    await writeFile(codeBehind, codeBehindSource);
+
+    const result = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "read", designer, codeBehind], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const model = JSON.parse(result.stdout);
+    assert.equal(model.readOnly, false);
+    assert.equal(model.layoutSource, "codeBehind");
+    model.controls[0].children[0].location = { x: 80, y: 88 };
+    model.controls[0].children[0].managedProperties.push("Location");
+
+    const write = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", codeBehind], {
+      cwd: root,
+      input: JSON.stringify(model),
+      encoding: "utf8"
+    });
+    assert.equal(write.status, 0, write.stderr || write.stdout);
+    assert.match(await readFile(codeBehind, "utf8"), /Location = new System\.Drawing\.Point\(80, 88\)/);
+    assert.equal(await readFile(designer, "utf8"), designerSource);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Roslyn keeps mixed InitializeComponent and procedural layouts read-only without hiding designer controls", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-mixed-layout-test-"));
+  try {
+    const designer = path.join(temporaryRoot, "Form1.Designer.cs");
+    const codeBehind = path.join(temporaryRoot, "Form1.cs");
+    const designerSource = `partial class Form1 : System.Windows.Forms.Form\n{\n    private System.Windows.Forms.Button existingButton;\n    private void InitializeComponent()\n    {\n        this.existingButton = new System.Windows.Forms.Button();\n        this.Controls.Add(this.existingButton);\n    }\n}\n`;
+    const codeBehindSource = `using System.Windows.Forms;\npartial class Form1\n{\n    private void Compose()\n    {\n        var panel = new Panel();\n        this.Controls.Add(panel);\n    }\n}\n`;
+    await writeFile(designer, designerSource);
+    await writeFile(codeBehind, codeBehindSource);
+
+    const result = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "read", designer, codeBehind], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const model = JSON.parse(result.stdout);
+    assert.equal(model.readOnly, true);
+    assert.equal(model.controls[0].children.length, 1);
+    assert.equal(model.controls[0].children[0].name, "existingButton");
+    assert.match(model.diagnostics.join(" "), /Both InitializeComponent\(\) and procedural control layouts were detected/);
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }

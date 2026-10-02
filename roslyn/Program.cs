@@ -28,7 +28,10 @@ try
         var model = JsonSerializer.Deserialize<DesignerDocument>(payload, jsonOptions)
             ?? throw new InvalidDataException("The designer document is empty.");
         if (model.readOnly) throw new InvalidOperationException("This form is built dynamically outside InitializeComponent() and cannot be safely edited by the visual designer.");
-        await File.WriteAllTextAsync(sourcePath, Designer.Write(source, model));
+        var updated = model.layoutMode == "procedural"
+            ? Designer.WriteProcedural(source, model)
+            : Designer.Write(source, model);
+        await File.WriteAllTextAsync(sourcePath, updated);
         return 0;
     }
 
@@ -45,16 +48,31 @@ internal static class Designer
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly Dictionary<string, string> SupportedTypes = new(StringComparer.Ordinal)
     {
-        ["Panel"] = "Panel", ["Button"] = "Button", ["Label"] = "Label", ["TextBox"] = "TextBox",
-        ["RichTextBox"] = "RichTextBox", ["CheckBox"] = "CheckBox", ["RadioButton"] = "RadioButton",
-        ["ComboBox"] = "ComboBox", ["ListBox"] = "ListBox", ["PictureBox"] = "PictureBox",
-        ["GroupBox"] = "GroupBox", ["TabControl"] = "TabControl", ["DataGridView"] = "DataGridView",
-        ["System.Windows.Forms.Panel"] = "Panel", ["System.Windows.Forms.Button"] = "Button",
-        ["System.Windows.Forms.Label"] = "Label", ["System.Windows.Forms.TextBox"] = "TextBox",
-        ["System.Windows.Forms.RichTextBox"] = "RichTextBox", ["System.Windows.Forms.CheckBox"] = "CheckBox",
-        ["System.Windows.Forms.RadioButton"] = "RadioButton", ["System.Windows.Forms.ComboBox"] = "ComboBox",
-        ["System.Windows.Forms.ListBox"] = "ListBox", ["System.Windows.Forms.PictureBox"] = "PictureBox",
-        ["System.Windows.Forms.GroupBox"] = "GroupBox", ["System.Windows.Forms.TabControl"] = "TabControl",
+        ["Panel"] = "Panel",
+        ["Button"] = "Button",
+        ["Label"] = "Label",
+        ["TextBox"] = "TextBox",
+        ["RichTextBox"] = "RichTextBox",
+        ["CheckBox"] = "CheckBox",
+        ["RadioButton"] = "RadioButton",
+        ["ComboBox"] = "ComboBox",
+        ["ListBox"] = "ListBox",
+        ["PictureBox"] = "PictureBox",
+        ["GroupBox"] = "GroupBox",
+        ["TabControl"] = "TabControl",
+        ["DataGridView"] = "DataGridView",
+        ["System.Windows.Forms.Panel"] = "Panel",
+        ["System.Windows.Forms.Button"] = "Button",
+        ["System.Windows.Forms.Label"] = "Label",
+        ["System.Windows.Forms.TextBox"] = "TextBox",
+        ["System.Windows.Forms.RichTextBox"] = "RichTextBox",
+        ["System.Windows.Forms.CheckBox"] = "CheckBox",
+        ["System.Windows.Forms.RadioButton"] = "RadioButton",
+        ["System.Windows.Forms.ComboBox"] = "ComboBox",
+        ["System.Windows.Forms.ListBox"] = "ListBox",
+        ["System.Windows.Forms.PictureBox"] = "PictureBox",
+        ["System.Windows.Forms.GroupBox"] = "GroupBox",
+        ["System.Windows.Forms.TabControl"] = "TabControl",
         ["System.Windows.Forms.DataGridView"] = "DataGridView"
     };
 
@@ -62,8 +80,40 @@ internal static class Designer
     {
         var root = CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
         var type = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
-            .FirstOrDefault(candidate => candidate.Members.OfType<MethodDeclarationSyntax>().Any(method => method.Identifier.ValueText == "InitializeComponent"))
-            ?? throw new InvalidDataException("InitializeComponent() was not found.");
+            .FirstOrDefault(candidate => candidate.Members.OfType<MethodDeclarationSyntax>().Any(method => method.Identifier.ValueText == "InitializeComponent"));
+        if (type is null)
+        {
+            var formRoot = string.IsNullOrWhiteSpace(codeBehind)
+                ? root
+                : CSharpSyntaxTree.ParseText(codeBehind).GetCompilationUnitRoot();
+            var formType = formRoot.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                .FirstOrDefault(candidate => candidate.BaseList?.Types.Any(baseType =>
+                    baseType.Type.ToString().Split('.').Last() is "Form" or "UserControl") == true)
+                ?? throw new InvalidDataException("No Form/UserControl class or InitializeComponent() method was found.");
+            var fallbackDiagnostics = root.SyntaxTree.GetDiagnostics()
+                .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+                .Select(diagnostic => $"{diagnostic.Location.GetLineSpan().StartLinePosition.Line + 1}:{diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1} {diagnostic.GetMessage()}")
+                .ToList();
+            var fallbackForm = NewControl("Form", formType.Identifier.ValueText);
+            fallbackForm.properties["Name"] = fallbackForm.name;
+            var fallbackReadOnly = TryReadCustomLayout(fallbackForm, codeBehind ?? source, fallbackDiagnostics, out var methods);
+            if (methods.Count == 0)
+                throw new InvalidDataException("No supported UI construction pattern was found outside InitializeComponent().");
+            SetParentSizes(fallbackForm);
+            return new DesignerDocument
+            {
+                formName = fallbackForm.name,
+                controls = new List<DesignerControl> { fallbackForm },
+                diagnostics = fallbackDiagnostics,
+                readOnly = fallbackReadOnly,
+                layoutMode = fallbackReadOnly ? null : "procedural",
+                layoutSource = fallbackReadOnly ? null : "codeBehind",
+                layoutMethods = methods,
+                canAddControls = fallbackReadOnly,
+                canRemoveControls = fallbackReadOnly,
+                canEditItems = false
+            };
+        }
         var method = type.Members.OfType<MethodDeclarationSyntax>().First(item => item.Identifier.ValueText == "InitializeComponent");
         var diagnostics = root.SyntaxTree.GetDiagnostics()
             .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
@@ -159,43 +209,334 @@ internal static class Designer
             else if (assignment.Left is MemberAccessExpressionSyntax formProperty && formProperty.Expression is ThisExpressionSyntax)
                 ReadProperty(form, formProperty.Name.Identifier.ValueText, assignment.Right);
         }
-            var readOnly = TryReadCustomLayout(form, codeBehind, diagnostics);
-            SetParentSizes(form);
+        var readOnly = TryReadCustomLayout(form, codeBehind, diagnostics, out var layoutMethods);
+        SetParentSizes(form);
 
-        return new DesignerDocument { formName = type.Identifier.ValueText, controls = new List<DesignerControl> { form }, diagnostics = diagnostics, readOnly = readOnly };
+        return new DesignerDocument
+        {
+            formName = type.Identifier.ValueText,
+            controls = new List<DesignerControl> { form },
+            diagnostics = diagnostics,
+            readOnly = readOnly,
+            layoutMode = layoutMethods.Count > 0 && !readOnly ? "procedural" : null,
+            layoutSource = layoutMethods.Count > 0 && !readOnly ? "codeBehind" : null,
+            layoutMethods = layoutMethods,
+            canAddControls = layoutMethods.Count == 0 || readOnly,
+            canRemoveControls = layoutMethods.Count == 0 || readOnly,
+            canEditItems = layoutMethods.Count == 0 || readOnly
+        };
     }
 
-    private static bool TryReadCustomLayout(DesignerControl form, string? codeBehind, List<string> diagnostics)
+    private static bool TryReadCustomLayout(DesignerControl form, string? codeBehind, List<string> diagnostics, out List<string> layoutMethodNames)
     {
+        layoutMethodNames = new List<string>();
         if (string.IsNullOrWhiteSpace(codeBehind)) return false;
 
         var root = CSharpSyntaxTree.ParseText(codeBehind).GetCompilationUnitRoot();
         var type = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
             .FirstOrDefault(candidate => candidate.Identifier.ValueText == form.name);
         if (type is null) return false;
+        form.managedProperties.Remove("Name");
 
         var layoutMethods = type.Members.OfType<MethodDeclarationSyntax>()
             .Where(method => method.Identifier.ValueText != "InitializeComponent" && method.Body is not null)
             .Where(method =>
-                method.DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Any(creation =>
-                {
-                    var name = creation.Type.ToString();
-                    var simple = name.Split('.').Last();
-                    return SupportedTypes.ContainsKey(name) || SupportedTypes.ContainsKey(simple);
-                }) &&
-                method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(invocation =>
-                    invocation.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Add", Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Controls" } }))
-            .ToList();
+                    method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(invocation =>
+                        IsControlsCollectionAdd(invocation)))
+                .ToList();
         if (layoutMethods.Count == 0) return false;
-
-        foreach (var assignment in layoutMethods.SelectMany(method => method.DescendantNodes().OfType<AssignmentExpressionSyntax>()))
+        if (form.children.Count > 0)
         {
-            if (assignment.Left is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } property)
-                ReadProperty(form, property.Name.Identifier.ValueText, assignment.Right);
+            layoutMethodNames = layoutMethods.Select(method => method.Identifier.ValueText).Distinct(StringComparer.Ordinal).ToList();
+            diagnostics.Add("Both InitializeComponent() and procedural control layouts were detected. The mixed layout is read-only to prevent hiding or overwriting controls from either source.");
+            return true;
         }
 
-        diagnostics.Add("This form creates its controls in custom code outside InitializeComponent(). The layout is shown as read-only because saving visual edits could overwrite or duplicate that code.");
-        return true;
+        var controls = new Dictionary<string, DesignerControl>(StringComparer.Ordinal);
+        var parents = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var readOnly = false;
+        foreach (var method in layoutMethods)
+        {
+            foreach (var declaration in method.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+            {
+                if (declaration.Initializer?.Value is not ObjectCreationExpressionSyntax creation ||
+                    !TrySupportedControlType(creation.Type, out var controlType)) continue;
+                var name = declaration.Identifier.ValueText;
+                if (!controls.TryAdd(name, NewControl(controlType, name)))
+                {
+                    diagnostics.Add($"The local control name '{name}' is ambiguous across layout methods.");
+                    readOnly = true;
+                    continue;
+                }
+                parents[name] = null;
+                if (creation.Initializer is not null)
+                {
+                    foreach (var assignment in creation.Initializer.Expressions.OfType<AssignmentExpressionSyntax>())
+                    {
+                        var property = assignment.Left switch
+                        {
+                            IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+                            MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+                            _ => null
+                        };
+                        if (property is not null) ReadProperty(controls[name], property, assignment.Right);
+                    }
+                }
+            }
+        }
+
+        foreach (var method in layoutMethods)
+        {
+            foreach (var creation in method.DescendantNodes().OfType<ObjectCreationExpressionSyntax>())
+            {
+                if (TrySupportedControlType(creation.Type, out _) &&
+                    !creation.Ancestors().OfType<VariableDeclaratorSyntax>().Any(variable => variable.Initializer?.Value == creation))
+                {
+                    diagnostics.Add("An inline control could not be named for editing; it is preserved while recognized local controls remain editable.");
+                }
+            }
+
+            foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(IsControlsCollectionAdd))
+            {
+                var childName = ControlReferenceName(invocation.ArgumentList.Arguments[0].Expression);
+                if (childName is null || !controls.ContainsKey(childName))
+                {
+                    diagnostics.Add("An inline, factory-created, or unresolved control is preserved but not exposed for editing.");
+                    continue;
+                }
+                var parentName = ControlCollectionOwner(invocation);
+                if (parentName is null)
+                {
+                    diagnostics.Add($"The parent of '{childName}' cannot be mapped; the control is not exposed for editing.");
+                    parents[childName] = null;
+                    continue;
+                }
+                parents[childName] = parentName;
+            }
+
+            foreach (var assignment in method.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) && !assignment.IsKind(SyntaxKind.AddAssignmentExpression)) continue;
+                var (controlName, property) = ControlProperty(assignment.Left);
+                if (controlName is not null && controls.TryGetValue(controlName, out var control) && property is not null)
+                {
+                    if (assignment.IsKind(SyntaxKind.AddAssignmentExpression))
+                    {
+                        var handler = EventHandlerName(assignment.Right);
+                        if (string.IsNullOrWhiteSpace(handler))
+                        {
+                            diagnostics.Add($"The custom handler for {controlName}.{property} is preserved but not exposed for editing.");
+                        }
+                        else control.events[property] = handler;
+                    }
+                    else ReadProperty(control, property, assignment.Right);
+                }
+                else if (IsFormPropertyAssignment(assignment.Left, out var formProperty))
+                {
+                    ReadProperty(form, formProperty, assignment.Right);
+                }
+            }
+        }
+
+        foreach (var method in layoutMethods)
+        {
+            foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(IsControlsCollectionAdd))
+            {
+                var childName = ControlReferenceName(invocation.ArgumentList.Arguments[0].Expression);
+                var parentName = ControlCollectionOwner(invocation);
+                if (childName is not null && controls.ContainsKey(childName) && parentName is not null)
+                    parents[childName] = parentName;
+            }
+        }
+
+        if (controls.Count == 0)
+        {
+            diagnostics.Add("UI-building code was found, but no supported named control variables could be mapped.");
+            return true;
+        }
+
+        if (controls.Keys.Any(name => parents.GetValueOrDefault(name) is null))
+        {
+            diagnostics.Add("Some detected controls are not attached through a recognized Controls.Add call.");
+            readOnly = true;
+        }
+
+        var duplicates = layoutMethods.GroupBy(method => method.Identifier.ValueText, StringComparer.Ordinal).Any(group => group.Count() > 1);
+        if (duplicates)
+        {
+            diagnostics.Add("Overloaded layout methods cannot be uniquely updated.");
+            readOnly = true;
+        }
+
+        form.children = new List<DesignerControl>();
+        foreach (var control in controls.Values) control.parent = parents.GetValueOrDefault(control.name);
+        AttachChildren(form, controls, parents);
+        layoutMethodNames = layoutMethods.Select(method => method.Identifier.ValueText).Distinct(StringComparer.Ordinal).ToList();
+
+        if (readOnly)
+            diagnostics.Add("Some custom UI construction cannot be mapped safely. Recognized controls are shown, but the layout is read-only.");
+        else
+            diagnostics.Add("Controls were detected from C# creation and Controls.Add patterns outside InitializeComponent(). Editing existing control properties is supported; adding or removing controls is disabled for this layout.");
+        return readOnly;
+    }
+
+    public static string WriteProcedural(string source, DesignerDocument model)
+    {
+        var root = CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
+        var type = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault(candidate => candidate.Identifier.ValueText == model.formName)
+            ?? throw new InvalidDataException($"Form class '{model.formName}' was not found in the custom layout source.");
+        var form = model.controls.FirstOrDefault(control => control.type == "Form")
+            ?? throw new InvalidDataException("The document must contain a Form root control.");
+        var controls = Flatten(form.children).ToList();
+        var targetMethodNames = model.layoutMethods.ToHashSet(StringComparer.Ordinal);
+        var methods = type.Members.OfType<MethodDeclarationSyntax>()
+            .Where(method => targetMethodNames.Contains(method.Identifier.ValueText) && method.Body is not null)
+            .ToList();
+        if (methods.Count != targetMethodNames.Count)
+            throw new InvalidDataException("One or more custom layout methods could not be found.");
+
+        foreach (var control in controls)
+        {
+            var currentMethods = type.Members.OfType<MethodDeclarationSyntax>()
+                .Where(method => targetMethodNames.Contains(method.Identifier.ValueText) && method.Body is not null)
+                .ToList();
+            var declarations = currentMethods.SelectMany(method => method.DescendantNodes().OfType<VariableDeclaratorSyntax>())
+                .Where(variable => variable.Identifier.ValueText == control.name && variable.Initializer?.Value is ObjectCreationExpressionSyntax)
+                .ToList();
+            if (declarations.Count != 1)
+                throw new InvalidDataException($"Control '{control.name}' is not uniquely declared as a local WinForms control.");
+
+            var originalDeclaration = declarations[0];
+            var declaration = originalDeclaration;
+            var method = currentMethods.Single(candidate => candidate.DescendantNodes().Contains(originalDeclaration));
+            var generatedProperties = CreateProperties(control, control.name)
+                .Where(statement => statement is ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax })
+                .Cast<ExpressionStatementSyntax>()
+                .ToList();
+            var generatedEvents = CreateEvents(control, control.name).Cast<ExpressionStatementSyntax>().ToList();
+            var replacements = new Dictionary<StatementSyntax, StatementSyntax>();
+            var insertions = new List<StatementSyntax>();
+            var removedEvents = new List<string>();
+            var initializer = ((ObjectCreationExpressionSyntax)declaration.Initializer!.Value).Initializer;
+
+            foreach (var statement in generatedProperties)
+            {
+                var assignment = (AssignmentExpressionSyntax)statement.Expression;
+                var property = ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.ValueText;
+                var initializerProperty = initializer?.Expressions.OfType<AssignmentExpressionSyntax>()
+                    .FirstOrDefault(item => item.Left.ToString() == property);
+                if (initializerProperty is not null)
+                {
+                    var updatedInitializer = initializer!.WithExpressions(SyntaxFactory.SeparatedList(
+                        initializer.Expressions.Select(item => item is AssignmentExpressionSyntax itemAssignment && itemAssignment == initializerProperty
+                            ? itemAssignment.WithRight(assignment.Right)
+                            : item)));
+                    var declarationInitializer = declaration.Initializer!;
+                    var creation = (ObjectCreationExpressionSyntax)declarationInitializer.Value;
+                    declaration = declaration.WithInitializer(declarationInitializer.WithValue(creation.WithInitializer(updatedInitializer)));
+                    initializer = updatedInitializer;
+                    continue;
+                }
+
+                var existing = method.Body!.DescendantNodes().OfType<ExpressionStatementSyntax>()
+                    .Where(item => item.Expression is AssignmentExpressionSyntax existingAssignment &&
+                        ControlProperty(existingAssignment.Left) == (control.name, property))
+                    .ToList();
+                if (existing.Count > 1)
+                    throw new InvalidDataException($"Property '{control.name}.{property}' is assigned multiple times and cannot be safely updated.");
+                if (existing.Count == 1) replacements[existing[0]] = statement;
+                else insertions.Add(statement);
+            }
+
+            foreach (var statement in generatedEvents)
+            {
+                var assignment = (AssignmentExpressionSyntax)statement.Expression;
+                var property = ((MemberAccessExpressionSyntax)assignment.Left).Name.Identifier.ValueText;
+                var existing = method.Body!.DescendantNodes().OfType<ExpressionStatementSyntax>()
+                    .Where(item => item.Expression is AssignmentExpressionSyntax existingAssignment &&
+                        existingAssignment.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                        ControlProperty(existingAssignment.Left) == (control.name, property))
+                    .ToList();
+                if (existing.Count > 1)
+                    throw new InvalidDataException($"Event '{control.name}.{property}' is subscribed multiple times and cannot be safely updated.");
+                if (existing.Count == 1) replacements[existing[0]] = statement;
+                else insertions.Add(statement);
+            }
+
+            foreach (var eventName in control.events.Where(pair => string.IsNullOrWhiteSpace(pair.Value)).Select(pair => pair.Key))
+            {
+                var existing = method.Body!.DescendantNodes().OfType<ExpressionStatementSyntax>()
+                    .Where(item => item.Expression is AssignmentExpressionSyntax existingAssignment &&
+                        existingAssignment.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                        ControlProperty(existingAssignment.Left) == (control.name, eventName))
+                    .ToList();
+                if (existing.Count > 1)
+                    throw new InvalidDataException($"Event '{control.name}.{eventName}' is subscribed multiple times and cannot be safely removed.");
+                if (existing.Count == 1) removedEvents.Add(eventName);
+            }
+
+            var updatedMethod = method.ReplaceNode(originalDeclaration, declaration);
+            foreach (var replacement in replacements)
+                updatedMethod = updatedMethod.ReplaceNode(replacement.Key, replacement.Value.WithTriviaFrom(replacement.Key));
+            foreach (var eventName in removedEvents)
+            {
+                var currentEvent = updatedMethod.Body!.DescendantNodes().OfType<ExpressionStatementSyntax>()
+                    .FirstOrDefault(item => item.Expression is AssignmentExpressionSyntax existingAssignment &&
+                        existingAssignment.IsKind(SyntaxKind.AddAssignmentExpression) &&
+                        ControlProperty(existingAssignment.Left) == (control.name, eventName));
+                if (currentEvent is not null)
+                    updatedMethod = updatedMethod.RemoveNode(currentEvent, SyntaxRemoveOptions.KeepExteriorTrivia) as MethodDeclarationSyntax
+                        ?? throw new InvalidDataException($"Event subscription for '{control.name}.{eventName}' could not be removed.");
+            }
+            if (insertions.Count > 0)
+            {
+                var currentDeclaration = updatedMethod.DescendantNodes().OfType<VariableDeclaratorSyntax>()
+                    .First(item => item.Identifier.ValueText == control.name);
+                var statementDeclaration = currentDeclaration.Ancestors().OfType<LocalDeclarationStatementSyntax>().FirstOrDefault()
+                    ?? throw new InvalidDataException($"Control '{control.name}' is not declared in a local statement.");
+                var formatted = insertions.Select(statement => statement
+                    .WithLeadingTrivia(SyntaxFactory.EndOfLine(Environment.NewLine), SyntaxFactory.Whitespace("        ")));
+                var body = updatedMethod.Body!;
+                var index = body.Statements.IndexOf(statementDeclaration);
+                updatedMethod = updatedMethod.WithBody(body.WithStatements(body.Statements.InsertRange(index + 1, formatted)));
+            }
+            type = type.ReplaceNode(method, updatedMethod);
+        }
+
+        foreach (var statement in CreateFormProperties(form))
+        {
+            if (statement is not ExpressionStatementSyntax { Expression: AssignmentExpressionSyntax generatedAssignment } ||
+                generatedAssignment.Left is not MemberAccessExpressionSyntax generatedTarget) continue;
+            var property = generatedTarget.Name.Identifier.ValueText;
+            var currentMethods = type.Members.OfType<MethodDeclarationSyntax>()
+                .Where(method => targetMethodNames.Contains(method.Identifier.ValueText) && method.Body is not null)
+                .ToList();
+            var existing = currentMethods.SelectMany(method => method.Body!.DescendantNodes().OfType<ExpressionStatementSyntax>())
+                .Where(item => item.Expression is AssignmentExpressionSyntax existingAssignment &&
+                    IsFormPropertyAssignment(existingAssignment.Left, out var existingProperty) && existingProperty == property)
+                .ToList();
+            if (existing.Count > 1)
+                throw new InvalidDataException($"Form property '{property}' is assigned multiple times and cannot be safely updated.");
+            if (existing.Count == 1)
+            {
+                var method = currentMethods.Single(candidate => candidate.DescendantNodes().Contains(existing[0]));
+                var updatedMethod = method.ReplaceNode(existing[0], statement.WithTriviaFrom(existing[0]));
+                type = type.ReplaceNode(method, updatedMethod);
+            }
+            else
+            {
+                var method = currentMethods[0];
+                var updatedMethod = method.WithBody(method.Body!.WithStatements(method.Body.Statements.Add(
+                    statement.WithLeadingTrivia(SyntaxFactory.EndOfLine(Environment.NewLine), SyntaxFactory.Whitespace("        ")))));
+                type = type.ReplaceNode(method, updatedMethod);
+            }
+        }
+
+        var updatedRoot = root.ReplaceNode(root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .First(candidate => candidate.Identifier.ValueText == type.Identifier.ValueText), type);
+        var result = updatedRoot.ToFullString();
+        return result.EndsWith(Environment.NewLine, StringComparison.Ordinal) ? result : result + Environment.NewLine;
     }
 
     public static string Write(string source, DesignerDocument model)
@@ -312,9 +653,12 @@ internal static class Designer
 
     private static void AttachChildren(DesignerControl parent, Dictionary<string, DesignerControl> controls, Dictionary<string, string?> parents)
     {
-        foreach (var control in controls.Values.Where(item => parents.GetValueOrDefault(item.name) == parent.name))
+        var parentName = parent.name;
+        foreach (var control in controls.Values.Where(item =>
+            parents.GetValueOrDefault(item.name) == parentName ||
+            (parent.type == "Form" && parents.GetValueOrDefault(item.name) == "this")))
         {
-            parent.children.Add(control);
+            if (!parent.children.Any(item => item.name == control.name)) parent.children.Add(control);
             AttachChildren(control, controls, parents);
         }
     }
@@ -330,17 +674,29 @@ internal static class Designer
 
     private static DesignerControl NewControl(string type, string name) => new()
     {
-        type = type, name = name, properties = new Dictionary<string, object>(), managedProperties = new List<string>(), events = new Dictionary<string, string>(), children = new List<DesignerControl>(), parent = null,
-        location = new PointModel(), size = type == "Form" ? new SizeModel { width = 800, height = 500 } : DefaultSize(type)
+        type = type,
+        name = name,
+        properties = new Dictionary<string, object>(),
+        managedProperties = new List<string>(),
+        events = new Dictionary<string, string>(),
+        children = new List<DesignerControl>(),
+        parent = null,
+        location = new PointModel(),
+        size = type == "Form" ? new SizeModel { width = 800, height = 500 } : DefaultSize(type)
     };
 
     private static SizeModel DefaultSize(string type) => type switch
     {
-        "Button" => new() { width = 120, height = 36 }, "Label" => new() { width = 120, height = 24 },
-        "TextBox" => new() { width = 180, height = 28 }, "RichTextBox" => new() { width = 220, height = 120 },
-        "CheckBox" or "RadioButton" => new() { width = 120, height = 24 }, "ComboBox" => new() { width = 160, height = 28 },
-        "ListBox" or "PictureBox" => new() { width = 160, height = 120 }, "GroupBox" => new() { width = 240, height = 160 },
-        "TabControl" => new() { width = 300, height = 200 }, "DataGridView" => new() { width = 360, height = 200 },
+        "Button" => new() { width = 120, height = 36 },
+        "Label" => new() { width = 120, height = 24 },
+        "TextBox" => new() { width = 180, height = 28 },
+        "RichTextBox" => new() { width = 220, height = 120 },
+        "CheckBox" or "RadioButton" => new() { width = 120, height = 24 },
+        "ComboBox" => new() { width = 160, height = 28 },
+        "ListBox" or "PictureBox" => new() { width = 160, height = 120 },
+        "GroupBox" => new() { width = 240, height = 160 },
+        "TabControl" => new() { width = 300, height = 200 },
+        "DataGridView" => new() { width = 360, height = 200 },
         _ => new() { width = 240, height = 160 }
     };
 
@@ -457,10 +813,56 @@ internal static class Designer
         return expression is ThisExpressionSyntax ? "this" : null;
     }
 
+    private static string? ControlReferenceName(ExpressionSyntax expression)
+    {
+        if (expression is ParenthesizedExpressionSyntax parenthesized) return ControlReferenceName(parenthesized.Expression);
+        if (expression is IdentifierNameSyntax identifier) return identifier.Identifier.ValueText;
+        if (expression is MemberAccessExpressionSyntax member && member.Expression is ThisExpressionSyntax)
+            return member.Name.Identifier.ValueText;
+        return expression is ThisExpressionSyntax ? "this" : null;
+    }
+
+    private static string? ControlCollectionOwner(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax add) return null;
+        if (add.Expression is IdentifierNameSyntax { Identifier.ValueText: "Controls" }) return "this";
+        if (add.Expression is not MemberAccessExpressionSyntax controls || controls.Name.Identifier.ValueText != "Controls") return null;
+        return ControlReferenceName(controls.Expression);
+    }
+
+    private static bool IsControlsCollectionAdd(InvocationExpressionSyntax invocation) =>
+        invocation.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Add" } &&
+        ControlCollectionOwner(invocation) is not null &&
+        invocation.ArgumentList.Arguments.Count == 1;
+
+    private static bool TrySupportedControlType(TypeSyntax type, out string controlType)
+    {
+        var name = type.ToString();
+        var simple = name.Split('.').Last();
+        if (SupportedTypes.TryGetValue(name, out var supported) || SupportedTypes.TryGetValue(simple, out supported))
+        {
+            controlType = supported;
+            return true;
+        }
+        controlType = "";
+        return false;
+    }
+
+    private static bool IsFormPropertyAssignment(ExpressionSyntax expression, out string property)
+    {
+        if (expression is MemberAccessExpressionSyntax member && member.Expression is ThisExpressionSyntax)
+        {
+            property = member.Name.Identifier.ValueText;
+            return true;
+        }
+        property = "";
+        return false;
+    }
+
     private static (string? Name, string? Property) ControlProperty(ExpressionSyntax expression)
     {
         if (expression is not MemberAccessExpressionSyntax propertyAccess) return (null, null);
-        var control = DirectControlName(propertyAccess.Expression);
+        var control = ControlReferenceName(propertyAccess.Expression);
         return control is null || control == "this" ? (null, propertyAccess.Name.Identifier.ValueText) : (control, propertyAccess.Name.Identifier.ValueText);
     }
 
@@ -549,17 +951,41 @@ internal static class Designer
         return managedProperties.Contains(property) || (property == "ClientSize" && managedProperties.Contains("Size"));
     }
 
+    private static IEnumerable<StatementSyntax> CreateFormProperties(DesignerControl form)
+    {
+        var managed = form.managedProperties.ToHashSet(StringComparer.Ordinal);
+        if (managed.Contains("Size")) yield return ParseStatement($"this.ClientSize = new System.Drawing.Size({form.size.width}, {form.size.height});");
+        if (managed.Contains("Width")) yield return ParseStatement($"this.Width = {form.size.width};");
+        if (managed.Contains("Height")) yield return ParseStatement($"this.Height = {form.size.height};");
+        if (managed.Contains("Location")) yield return ParseStatement($"this.Location = new System.Drawing.Point({form.location.x}, {form.location.y});");
+        foreach (var pair in form.properties)
+        {
+            if (!managed.Contains(pair.Key)) continue;
+            var expression = pair.Key switch
+            {
+                "Text" or "Name" => SyntaxFactory.Literal(ValueString(pair.Value)).ToString(),
+                "Enabled" or "Visible" => bool.TryParse(ValueString(pair.Value), out var enabled) && enabled ? "true" : "false",
+                "BackColor" when !string.IsNullOrWhiteSpace(ValueString(pair.Value)) => $"System.Drawing.ColorTranslator.FromHtml({SyntaxFactory.Literal(ValueString(pair.Value)).ToString()})",
+                _ => null
+            };
+            if (expression is not null) yield return ParseStatement($"this.{pair.Key} = {expression};");
+        }
+        if (managed.Contains("Font")) yield return CreateFontStatement("this", form.properties);
+    }
+
     private static StatementSyntax CreateControl(DesignerControl control) => ParseStatement($"this.{control.name} = new System.Windows.Forms.{control.type}();");
 
-    private static IEnumerable<StatementSyntax> CreateProperties(DesignerControl control)
+    private static IEnumerable<StatementSyntax> CreateProperties(DesignerControl control) => CreateProperties(control, $"this.{control.name}");
+
+    private static IEnumerable<StatementSyntax> CreateProperties(DesignerControl control, string target)
     {
         var managed = control.managedProperties.ToHashSet(StringComparer.Ordinal);
-        if (managed.Contains("Location")) yield return ParseStatement($"this.{control.name}.Location = new System.Drawing.Point({control.location.x}, {control.location.y});");
-        if (managed.Contains("Size")) yield return ParseStatement($"this.{control.name}.Size = new System.Drawing.Size({control.size.width}, {control.size.height});");
+        if (managed.Contains("Location")) yield return ParseStatement($"{target}.Location = new System.Drawing.Point({control.location.x}, {control.location.y});");
+        if (managed.Contains("Size")) yield return ParseStatement($"{target}.Size = new System.Drawing.Size({control.size.width}, {control.size.height});");
         else
         {
-            if (managed.Contains("Width")) yield return ParseStatement($"this.{control.name}.Width = {control.size.width};");
-            if (managed.Contains("Height")) yield return ParseStatement($"this.{control.name}.Height = {control.size.height};");
+            if (managed.Contains("Width")) yield return ParseStatement($"{target}.Width = {control.size.width};");
+            if (managed.Contains("Height")) yield return ParseStatement($"{target}.Height = {control.size.height};");
         }
         foreach (var pair in control.properties)
         {
@@ -576,30 +1002,32 @@ internal static class Designer
                 "Dock" => EnumExpression("System.Windows.Forms.DockStyle", ValueString(pair.Value), ["None", "Top", "Bottom", "Left", "Right", "Fill"]),
                 _ => null
             };
-            if (expression is not null) yield return ParseStatement($"this.{control.name}.{pair.Key} = {expression};");
+            if (expression is not null) yield return ParseStatement($"{target}.{pair.Key} = {expression};");
         }
         if (managed.Contains("Items"))
         {
             var json = ValueString(control.properties["Items"]);
             var items = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
-            yield return ParseStatement($"this.{control.name}.Items.Clear();");
+            yield return ParseStatement($"{target}.Items.Clear();");
             if (items.Count > 0)
             {
                 var values = string.Join(", ", items.Select(item => SyntaxFactory.Literal(item).ToString()));
-                yield return ParseStatement($"this.{control.name}.Items.AddRange(new object[] {{ {values} }});");
+                yield return ParseStatement($"{target}.Items.AddRange(new object[] {{ {values} }});");
             }
         }
-        if (managed.Contains("Font")) yield return CreateFontStatement($"this.{control.name}", control.properties);
+        if (managed.Contains("Font")) yield return CreateFontStatement(target, control.properties);
     }
 
-    private static IEnumerable<StatementSyntax> CreateEvents(DesignerControl control)
+    private static IEnumerable<StatementSyntax> CreateEvents(DesignerControl control) => CreateEvents(control, $"this.{control.name}");
+
+    private static IEnumerable<StatementSyntax> CreateEvents(DesignerControl control, string target)
     {
         foreach (var pair in control.events)
         {
             if (string.IsNullOrWhiteSpace(pair.Value)) continue;
             if (!SyntaxFacts.IsValidIdentifier(pair.Key)) throw new InvalidDataException($"Invalid event name: {pair.Key}");
             if (!SyntaxFacts.IsValidIdentifier(pair.Value)) throw new InvalidDataException($"Invalid handler name: {pair.Value}");
-            yield return ParseStatement($"this.{control.name}.{pair.Key} += this.{pair.Value};");
+            yield return ParseStatement($"{target}.{pair.Key} += this.{pair.Value};");
         }
     }
 
@@ -663,6 +1091,12 @@ internal sealed class DesignerDocument
     public List<DesignerControl> controls { get; set; } = new();
     public List<string> diagnostics { get; set; } = new();
     public bool readOnly { get; set; }
+    public string? layoutMode { get; set; }
+    public string? layoutSource { get; set; }
+    public List<string> layoutMethods { get; set; } = new();
+    public bool canAddControls { get; set; } = true;
+    public bool canRemoveControls { get; set; } = true;
+    public bool canEditItems { get; set; } = true;
 }
 
 internal sealed class DesignerControl
