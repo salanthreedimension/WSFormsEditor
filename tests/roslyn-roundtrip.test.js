@@ -141,3 +141,20 @@ test("Roslyn expands expression-bodied InitializeComponent methods", async () =>
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
+
+test("Roslyn edits a layout stored in the Form.cs file", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-single-file-test-"));
+  try {
+    const form = path.join(temporaryRoot, "Form1.cs");
+    await writeFile(form, `namespace SingleFileSample;\npartial class Form1 : System.Windows.Forms.Form\n{\n    private System.Windows.Forms.Button button1 = null!;\n\n    private void InitializeComponent()\n    {\n        this.button1 = new System.Windows.Forms.Button();\n        this.button1.Name = "button1";\n        this.Controls.Add(this.button1);\n    }\n}\n`);
+    const model = JSON.parse(runHelper("read", form));
+    model.controls[0].children[0].location.x = 80;
+    model.controls[0].children[0].managedProperties.push("Location");
+    runHelper("write", form, JSON.stringify(model));
+    const generated = await readFile(form, "utf8");
+    assert.match(generated, /this\.button1\.Location = new System\.Drawing\.Point\(80, 0\);/);
+    assert.match(generated, /this\.Controls\.Add\(this\.button1\);/);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});

@@ -10,8 +10,23 @@ import { DesignerDocument, DesignerMessage } from "./model";
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.commands.registerCommand("winformsDesigner.openDesigner", async (resource?: vscode.Uri) => {
     const source = resource ?? vscode.window.activeTextEditor?.document.uri;
-    if (!source || source.fsPath.toLowerCase().endsWith(".designer.cs")) {
+    if (!source || !source.fsPath.toLowerCase().endsWith(".cs")) {
       vscode.window.showWarningMessage("Open a Form or UserControl .cs file to start the designer.");
+      return;
+    }
+
+    const selectedDesignerFile = /\.Designer\.cs$/i.test(source.fsPath);
+    const formPath = selectedDesignerFile ? source.fsPath.replace(/\.Designer\.cs$/i, ".cs") : source.fsPath;
+    let designerPath = selectedDesignerFile ? source.fsPath : formPath.replace(/\.cs$/i, ".Designer.cs");
+    if (!(await fileExists(designerPath))) {
+      if (selectedDesignerFile || !(await containsInitializeComponent(formPath))) {
+        vscode.window.showErrorMessage(`Designer file not found: ${path.basename(designerPath)}. A single-file Form must declare InitializeComponent().`);
+        return;
+      }
+      designerPath = formPath;
+    }
+    if (findOpenDocument(designerPath)?.isDirty) {
+      vscode.window.showWarningMessage("Save the layout file before opening the visual designer.");
       return;
     }
 
@@ -20,25 +35,15 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showErrorMessage("The file must be inside a workspace folder.");
       return;
     }
-    const project = await findWinFormsProject(workspace.uri.fsPath, source.fsPath);
+    const project = await findWinFormsProject(workspace.uri.fsPath, source.fsPath, designerPath);
     if (!project) {
       vscode.window.showErrorMessage("No WinForms .NET project was found for this file. Enable UseWindowsForms or target Windows.");
       return;
     }
     const projectPath = project;
 
-    const designerPath = source.fsPath.replace(/\.cs$/i, ".Designer.cs");
-    if (!(await fileExists(designerPath))) {
-      vscode.window.showErrorMessage(`Designer file not found: ${path.basename(designerPath)}`);
-      return;
-    }
-    if (findOpenDocument(designerPath)?.isDirty) {
-      vscode.window.showWarningMessage("Save the .Designer.cs file before opening the visual designer.");
-      return;
-    }
-
     try {
-      const panel = vscode.window.createWebviewPanel("winformsVisualDesigner", `Designer: ${path.basename(source.fsPath)}`, vscode.ViewColumn.Beside, {
+      const panel = vscode.window.createWebviewPanel("winformsVisualDesigner", `Designer: ${path.basename(formPath)}`, vscode.ViewColumn.Beside, {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")],
         retainContextWhenHidden: true
@@ -181,7 +186,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {}
 
-async function findWinFormsProject(root: string, source: string): Promise<string | undefined> {
+async function findWinFormsProject(root: string, source: string, designerPath: string): Promise<string | undefined> {
   const projects = await vscode.workspace.findFiles(new vscode.RelativePattern(root, "**/*.csproj"), "**/bin/**,**/obj/**", 100);
   const directory = path.dirname(source).toLowerCase();
   const matches: string[] = [];
@@ -193,7 +198,6 @@ async function findWinFormsProject(root: string, source: string): Promise<string
     const projectText = Buffer.from(content).toString("utf8");
     const explicitWinForms = /<UseWindowsForms>\s*true\s*<\/UseWindowsForms>/i.test(projectText);
     const windowsTarget = /<TargetFrameworks?>\s*[^<]*-windows[^<]*<\/TargetFrameworks?>/i.test(projectText);
-    const designerPath = source.replace(/\.cs$/i, ".Designer.cs");
     const designerText = await fileExists(designerPath)
       ? Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(designerPath))).toString("utf8")
       : "";
@@ -201,6 +205,21 @@ async function findWinFormsProject(root: string, source: string): Promise<string
     if (explicitWinForms || (windowsTarget && hasWinFormsTypes)) matches.push(projectPath);
   }
   return matches.sort((a, b) => b.length - a.length)[0];
+}
+
+async function containsInitializeComponent(filePath: string): Promise<boolean> {
+  try {
+    const openDocument = findOpenDocument(filePath);
+    const source = openDocument?.getText() ?? Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(filePath))).toString("utf8");
+    return /\bInitializeComponent\s*\([^)]*\)\s*(?:\{|=>)/s.test(source);
+  } catch (error) {
+    if (isFileNotFound(error)) return false;
+    throw error;
+  }
+}
+
+function isFileNotFound(error: unknown): boolean {
+  return error instanceof vscode.FileSystemError && error.code === "FileNotFound";
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

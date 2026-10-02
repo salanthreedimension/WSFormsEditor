@@ -28,7 +28,7 @@ O WinForms Visual Designer adiciona uma superfície visual a projetos Windows Fo
 - Undo/redo, copiar, colar, duplicar e excluir controles.
 - Preview HTML interativo e execução opcional do Form WinForms real em uma janela nativa separada.
 - Sincronização Roslyn que substitui somente atribuições reconhecidas ou alteradas e preserva expressões C# que não consegue mapear.
-- Proteção para mudanças externas no arquivo e buffers `.Designer.cs` não salvos; validação com `dotnet build`.
+- Proteção para mudanças externas no arquivo e buffers de layout não salvos; validação com `dotnet build`.
 
 ### Requisitos
 
@@ -36,7 +36,7 @@ O WinForms Visual Designer adiciona uma superfície visual a projetos Windows Fo
 - .NET SDK 10 para executar o helper Roslyn e compilar a extensão. O aplicativo WinForms de destino precisa ter o SDK/runtime apropriado ao próprio projeto.
 - Node.js e npm somente para desenvolver ou empacotar a extensão a partir do código-fonte.
 - Projeto SDK-style com `UseWindowsForms=true`, ou Target Framework `*-windows` e tipos WinForms reconhecíveis no arquivo Designer.
-- Um arquivo `Form.cs` e seu par `Form.Designer.cs`, com `InitializeComponent()` em bloco ou expressão direta.
+- Um projeto SDK-style e um arquivo `.cs` que contenha `InitializeComponent()` em bloco ou expressão direta. O layout pode estar no mesmo arquivo, em `Form.Designer.cs` ou ser aberto diretamente pelo arquivo Designer.
 
 ### Instalação
 
@@ -49,14 +49,14 @@ Para desenvolver a extensão localmente, consulte a seção [Desenvolvimento](#d
 ### Como usar
 
 1. Abra no VS Code a pasta que contém o `.csproj` do projeto WinForms.
-2. Confirme que o projeto é detectável: tenha `<UseWindowsForms>true</UseWindowsForms>` no `.csproj`, ou use um target como `net10.0-windows` e tipos WinForms no par `.Designer.cs`.
-3. Abra o arquivo parcial do Form, por exemplo `Form1.cs`. Não abra `Form1.Designer.cs` para iniciar o Designer.
+2. Confirme que o projeto é detectável: tenha `<UseWindowsForms>true</UseWindowsForms>` no `.csproj`, ou use um target como `net10.0-windows` e tipos WinForms no arquivo que contém o layout.
+3. Abra o arquivo `.cs` do Form/UserControl ou seu `.Designer.cs` para iniciar o Designer. Se não houver arquivo Designer separado, o próprio `.cs` precisa declarar `InitializeComponent()`.
 4. Clique no ícone **WinForms: Open Visual Designer** no título do editor ou execute esse comando pela Command Palette (`Ctrl+Shift+P`).
 5. Use a Toolbox à esquerda para adicionar um controle. Arraste-o para posicionar; solte-o sobre Panel, GroupBox ou TabControl para aninhá-lo. Também é possível clicar no item para adicioná-lo ao Form.
 6. Clique em um controle para selecioná-lo. Segure `Shift` para montar uma seleção múltipla. Arraste para mover; arraste uma das oito alças para redimensionar. O snap usa incrementos de 8 px e guias aparecem perto de alinhamentos.
-7. Edite as propriedades à direita. As alterações são gravadas automaticamente no `.Designer.cs`; os handlers de evento são nomes de métodos C# existentes ou que você criará no arquivo parcial do Form.
+7. Edite as propriedades à direita. As alterações são gravadas automaticamente no arquivo que contém `InitializeComponent()`; os handlers de evento são nomes de métodos C# existentes ou que você criará no arquivo parcial do Form.
 8. Use **Preview** para experimentar os equivalentes HTML. Use **Run Form** para compilar e abrir o aplicativo WinForms real; essa janela é nativa e separada do VS Code. **Stop** encerra o processo.
-9. Se o `.Designer.cs` mudar em outro lugar, escolha **Reload** para descartar o modelo visual local ou **Save and overwrite** para salvar o buffer aberto e aplicar explicitamente o modelo do Designer.
+9. Se o arquivo de layout mudar em outro lugar, escolha **Reload** para descartar o modelo visual local ou **Save and overwrite** para salvar o buffer aberto e aplicar explicitamente o modelo do Designer.
 
 O comando de execução exige que os arquivos C# abertos do projeto estejam salvos. Se a compilação falhar, os erros aparecem na barra de status; corrija-os no código e execute novamente.
 
@@ -129,7 +129,7 @@ WinForms Visual Designer adds a visual editing surface to C# Windows Forms proje
 - Undo/redo, copy, paste, duplicate, and delete.
 - Interactive HTML preview and optional execution of the real WinForms Form in a separate native window.
 - Roslyn updates only recognized or edited assignments and preserves C# expressions it cannot map.
-- Protection against external file changes and dirty `.Designer.cs` buffers; project validation through `dotnet build`.
+- Protection against external file changes and dirty layout-file buffers; project validation through `dotnet build`.
 
 ### Requirements
 
@@ -137,7 +137,7 @@ WinForms Visual Designer adds a visual editing surface to C# Windows Forms proje
 - .NET SDK 10 to run the Roslyn helper and build the extension. The target WinForms app also needs the SDK/runtime required by its own project.
 - Node.js and npm only when developing or packaging the extension from source.
 - An SDK-style project with `UseWindowsForms=true`, or a `*-windows` target framework and recognizable WinForms types in the paired Designer file.
-- A Form code file such as `Form1.cs` and its paired `Form1.Designer.cs`, with a block-bodied or direct expression-bodied `InitializeComponent()`.
+- An SDK-style project and a `.cs` file containing a block-bodied or direct expression-bodied `InitializeComponent()`. The layout may be in the same file, in `Form.Designer.cs`, or opened directly from the Designer file.
 
 ### Install
 
@@ -150,14 +150,14 @@ To run the extension from source, see [Development](#development).
 ### Using the Designer
 
 1. Open the folder containing your WinForms `.csproj` in VS Code.
-2. Make sure the project can be detected: set `<UseWindowsForms>true</UseWindowsForms>` in the project, or use a target such as `net10.0-windows` with WinForms types in the paired `.Designer.cs` file.
-3. Open the Form's partial code file, for example `Form1.cs`. Do not open `Form1.Designer.cs` to start the designer.
+2. Make sure the project can be detected: set `<UseWindowsForms>true</UseWindowsForms>` in the project, or use a target such as `net10.0-windows` with WinForms types in the file containing the layout.
+3. Open the Form/UserControl `.cs` file or its `.Designer.cs` file to start the designer. Without a separate Designer file, the `.cs` itself must declare `InitializeComponent()`.
 4. Click **WinForms: Open Visual Designer** in the editor title, or run the command from the Command Palette (`Ctrl+Shift+P`).
 5. Use the Toolbox on the left to add a control. Drag it to position it; drop it on a Panel, GroupBox, or TabControl to create a child. Clicking a Toolbox item adds it to the Form.
 6. Click a control to select it. Hold `Shift` while clicking or dragging to build a multi-selection. Drag to move; drag any of the eight handles to resize. The grid snaps in 8 px increments and alignment guides appear near matching edges and centers.
-7. Edit properties on the right. Changes are written automatically to `.Designer.cs`. Event bindings refer to C# methods that exist, or will be added, in the Form's partial code file.
+7. Edit properties on the right. Changes are written automatically to the file containing `InitializeComponent()`. Event bindings refer to C# methods that exist, or will be added, in the Form's partial code file.
 8. Use **Preview** to try the HTML equivalents. Use **Run Form** to build and launch the real WinForms app; it opens in a separate native window. **Stop** terminates the process.
-9. If `.Designer.cs` changes elsewhere, choose **Reload** to discard the local visual model, or **Save and overwrite** to save the open editor buffer and explicitly apply the Designer model.
+9. If the layout file changes elsewhere, choose **Reload** to discard the local visual model, or **Save and overwrite** to save the open editor buffer and explicitly apply the Designer model.
 
 The Run command requires all open C# files in the project to be saved. Build errors appear in the status bar; fix them in source and run again.
 
