@@ -47,7 +47,7 @@ test("Roslyn updates visual properties and Click without damaging handlers", asy
               FontBold: true, FontItalic: false, FontUnderline: false, FontStrikeout: false, Enabled: true, Visible: true
             },
             managedProperties: ["Location", "Size", "Name", "Text", "TabIndex", "Anchor", "Dock", "BackColor", "ForeColor", "Font", "Enabled", "Visible"],
-            events: { Click: "button1_Click" }, children: [], parent: "this",
+            events: { Click: "button1_Click", DoubleClick: "button1_Click" }, children: [], parent: "this",
             location: { x: 40, y: 120 }, size: { width: 132, height: 40 }
           },
           {
@@ -59,8 +59,40 @@ test("Roslyn updates visual properties and Click without damaging handlers", asy
             events: {}, children: [], parent: "this", location: { x: 32, y: 64 }, size: { width: 180, height: 28 }
           },
           {
-            type: "Button", name: "button2", properties: { Name: "button2", Text: "Novo" }, managedProperties: ["Location", "Size", "Name", "Text"],
-            events: {}, children: [], parent: "this", location: { x: 200, y: 200 }, size: { width: 120, height: 36 }
+            type: "ComboBox", name: "comboBox1", properties: { Name: "comboBox1", Text: "Novo", Items: JSON.stringify(["Alpha", "Beta"]) }, managedProperties: ["Location", "Size", "Name", "Text", "Items"],
+            events: { SelectedIndexChanged: "button1_Click" }, children: [], parent: "this", location: { x: 200, y: 200 }, size: { width: 160, height: 28 }
+          },
+          {
+            type: "DataGridView", name: "dataGridView1", properties: { Name: "dataGridView1", TabIndex: 4 }, managedProperties: ["Location", "Size", "Name", "TabIndex"],
+            events: {}, children: [], parent: "this", location: { x: 320, y: 200 }, size: { width: 360, height: 200 }
+          },
+          {
+            type: "RichTextBox", name: "richTextBox1", properties: { Name: "richTextBox1", Text: "Rich" }, managedProperties: ["Location", "Size", "Name", "Text"],
+            events: { TextChanged: "button1_Click" }, children: [], parent: "this", location: { x: 24, y: 260 }, size: { width: 220, height: 120 }
+          },
+          {
+            type: "CheckBox", name: "checkBox1", properties: { Name: "checkBox1", Text: "Aceito", Checked: true }, managedProperties: ["Location", "Size", "Name", "Text", "Checked"],
+            events: { CheckedChanged: "button1_Click" }, children: [], parent: "this", location: { x: 24, y: 400 }, size: { width: 120, height: 24 }
+          },
+          {
+            type: "RadioButton", name: "radioButton1", properties: { Name: "radioButton1", Text: "Opção", Checked: false }, managedProperties: ["Location", "Size", "Name", "Text", "Checked"],
+            events: {}, children: [], parent: "this", location: { x: 160, y: 400 }, size: { width: 120, height: 24 }
+          },
+          {
+            type: "ListBox", name: "listBox1", properties: { Name: "listBox1", Items: JSON.stringify(["Um", "Dois"]) }, managedProperties: ["Location", "Size", "Name", "Items"],
+            events: { SelectedIndexChanged: "button1_Click" }, children: [], parent: "this", location: { x: 700, y: 24 }, size: { width: 160, height: 120 }
+          },
+          {
+            type: "PictureBox", name: "pictureBox1", properties: { Name: "pictureBox1", ImageLocation: "photo.png" }, managedProperties: ["Location", "Size", "Name", "ImageLocation"],
+            events: {}, children: [], parent: "this", location: { x: 700, y: 160 }, size: { width: 160, height: 120 }
+          },
+          {
+            type: "GroupBox", name: "groupBox1", properties: { Name: "groupBox1", Text: "Grupo" }, managedProperties: ["Location", "Size", "Name", "Text"],
+            events: {}, children: [], parent: "this", location: { x: 900, y: 24 }, size: { width: 240, height: 160 }
+          },
+          {
+            type: "TabControl", name: "tabControl1", properties: { Name: "tabControl1", Text: "Abas" }, managedProperties: ["Location", "Size", "Name", "Text"],
+            events: {}, children: [], parent: "this", location: { x: 900, y: 200 }, size: { width: 300, height: 200 }
           }
         ]
       }]
@@ -69,10 +101,16 @@ test("Roslyn updates visual properties and Click without damaging handlers", asy
     runHelper("write", designer, JSON.stringify(model));
     const generated = await readFile(designer, "utf8");
     assert.match(generated, /this\.button1\.Click \+= this\.button1_Click;/);
+    assert.match(generated, /this\.button1\.DoubleClick \+= this\.button1_Click;/);
+    assert.match(generated, /this\.comboBox1\.SelectedIndexChanged \+= this\.button1_Click;/);
+    assert.match(generated, /this\.comboBox1\.Items\.AddRange\(new object\[\] \{ "Alpha", "Beta" \}\);/);
+    assert.match(generated, /this\.listBox1\.Items\.AddRange\(new object\[\] \{ "Um", "Dois" \}\);/);
+    assert.match(generated, /this\.checkBox1\.Checked = true;/);
+    assert.match(generated, /this\.pictureBox1\.ImageLocation = "photo.png";/);
     assert.match(generated, /AnchorStyles\.Top \| System\.Windows\.Forms\.AnchorStyles\.Left/);
     assert.match(generated, /DockStyle\.None/);
     assert.match(generated, /FontStyle\.Bold/);
-    assert.match(generated, /this\.button2\.Location = new System\.Drawing\.Point\(200, 200\);/);
+    assert.match(generated, /this\.comboBox1\.Location = new System\.Drawing\.Point\(200, 200\);/);
     assert.match(generated, /this\.label1\.Location = new System\.Drawing\.Point\(GetLabelX\(\), 24\);/);
     assert.match(generated, /this\.button1\.UseVisualStyleBackColor = true;/);
     assert.doesNotMatch(generated, /panel1/);

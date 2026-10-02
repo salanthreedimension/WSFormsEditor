@@ -44,8 +44,16 @@ internal static class Designer
     private static readonly Dictionary<string, string> SupportedTypes = new(StringComparer.Ordinal)
     {
         ["Panel"] = "Panel", ["Button"] = "Button", ["Label"] = "Label", ["TextBox"] = "TextBox",
+        ["RichTextBox"] = "RichTextBox", ["CheckBox"] = "CheckBox", ["RadioButton"] = "RadioButton",
+        ["ComboBox"] = "ComboBox", ["ListBox"] = "ListBox", ["PictureBox"] = "PictureBox",
+        ["GroupBox"] = "GroupBox", ["TabControl"] = "TabControl", ["DataGridView"] = "DataGridView",
         ["System.Windows.Forms.Panel"] = "Panel", ["System.Windows.Forms.Button"] = "Button",
-        ["System.Windows.Forms.Label"] = "Label", ["System.Windows.Forms.TextBox"] = "TextBox"
+        ["System.Windows.Forms.Label"] = "Label", ["System.Windows.Forms.TextBox"] = "TextBox",
+        ["System.Windows.Forms.RichTextBox"] = "RichTextBox", ["System.Windows.Forms.CheckBox"] = "CheckBox",
+        ["System.Windows.Forms.RadioButton"] = "RadioButton", ["System.Windows.Forms.ComboBox"] = "ComboBox",
+        ["System.Windows.Forms.ListBox"] = "ListBox", ["System.Windows.Forms.PictureBox"] = "PictureBox",
+        ["System.Windows.Forms.GroupBox"] = "GroupBox", ["System.Windows.Forms.TabControl"] = "TabControl",
+        ["System.Windows.Forms.DataGridView"] = "DataGridView"
     };
 
     public static DesignerDocument Read(string source)
@@ -100,11 +108,32 @@ internal static class Designer
             parents[childName] = parentName == "Controls" ? "this" : parentName;
         }
 
+        var parsedItems = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var opaqueItems = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var invocation in method.DescendantNodes().OfType<InvocationExpressionSyntax>())
+        {
+            var controlName = ItemsControlName(invocation);
+            if (controlName is null || !controls.TryGetValue(controlName, out var control) || control.type is not ("ComboBox" or "ListBox")) continue;
+            if (!TryReadItems(invocation, out var values))
+            {
+                opaqueItems.Add(controlName);
+                diagnostics.Add($"Os itens de '{controlName}' usam uma expressão que não pode ser editada; serão preservados.");
+                continue;
+            }
+            if (!parsedItems.TryGetValue(controlName, out var items)) parsedItems[controlName] = items = new List<string>();
+            items.AddRange(values);
+        }
+        foreach (var (name, items) in parsedItems.Where(pair => !opaqueItems.Contains(pair.Key)))
+        {
+            controls[name].properties["Items"] = JsonSerializer.Serialize(items);
+            MarkManaged(controls[name], "Items");
+        }
+
         foreach (var assignment in method.DescendantNodes().OfType<AssignmentExpressionSyntax>().Where(item => item.IsKind(SyntaxKind.AddAssignmentExpression)))
         {
             var (controlName, eventName) = ControlProperty(assignment.Left);
             if (controlName is null || eventName is null || !controls.TryGetValue(controlName, out var control)) continue;
-            var handler = assignment.Right.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().LastOrDefault()?.Identifier.ValueText;
+            var handler = EventHandlerName(assignment.Right);
             if (string.IsNullOrWhiteSpace(handler)) diagnostics.Add($"O handler de {controlName}.{eventName} não pôde ser representado no Designer.");
             else control.events[eventName] = handler;
         }
@@ -128,6 +157,7 @@ internal static class Designer
             else if (assignment.Left is MemberAccessExpressionSyntax formProperty && formProperty.Expression is ThisExpressionSyntax)
                 ReadProperty(form, formProperty.Name.Identifier.ValueText, assignment.Right);
         }
+            SetParentSizes(form);
 
         return new DesignerDocument { formName = type.Identifier.ValueText, controls = new List<DesignerControl> { form }, diagnostics = diagnostics };
     }
@@ -171,7 +201,7 @@ internal static class Designer
         {
             return control.managedProperties.ToHashSet(StringComparer.Ordinal);
         }, StringComparer.Ordinal);
-        var managedEvents = controls.Where(control => control.events.ContainsKey("Click")).Select(control => control.name).ToHashSet(StringComparer.Ordinal);
+        var managedEvents = controls.ToDictionary(control => control.name, control => control.events.Keys.ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
         var formManagedProperties = form.managedProperties.ToHashSet(StringComparer.Ordinal);
         var originalStatements = method.Body.Statements;
         var keptStatements = new List<StatementSyntax>();
@@ -253,6 +283,15 @@ internal static class Designer
         }
     }
 
+    private static void SetParentSizes(DesignerControl parent)
+    {
+        foreach (var child in parent.children)
+        {
+            child.parentSize = new SizeModel { width = parent.size.width, height = parent.size.height };
+            SetParentSizes(child);
+        }
+    }
+
     private static DesignerControl NewControl(string type, string name) => new()
     {
         type = type, name = name, properties = new Dictionary<string, object>(), managedProperties = new List<string>(), events = new Dictionary<string, string>(), children = new List<DesignerControl>(), parent = null,
@@ -262,7 +301,11 @@ internal static class Designer
     private static SizeModel DefaultSize(string type) => type switch
     {
         "Button" => new() { width = 120, height = 36 }, "Label" => new() { width = 120, height = 24 },
-        "TextBox" => new() { width = 180, height = 28 }, _ => new() { width = 240, height = 160 }
+        "TextBox" => new() { width = 180, height = 28 }, "RichTextBox" => new() { width = 220, height = 120 },
+        "CheckBox" or "RadioButton" => new() { width = 120, height = 24 }, "ComboBox" => new() { width = 160, height = 28 },
+        "ListBox" or "PictureBox" => new() { width = 160, height = 120 }, "GroupBox" => new() { width = 240, height = 160 },
+        "TabControl" => new() { width = 300, height = 200 }, "DataGridView" => new() { width = 360, height = 200 },
+        _ => new() { width = 240, height = 160 }
     };
 
     private static void ReadProperty(DesignerControl control, string property, ExpressionSyntax value)
@@ -279,12 +322,12 @@ internal static class Designer
             if (property == "Width") control.size.width = dimension; else control.size.height = dimension;
             MarkManaged(control, property);
         }
-        else if (property is "Text" or "Name" && value is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.StringLiteralExpression))
+        else if (property is "Text" or "Name" or "ImageLocation" && value is LiteralExpressionSyntax literal && literal.IsKind(SyntaxKind.StringLiteralExpression))
         {
             control.properties[property] = literal.Token.ValueText;
             MarkManaged(control, property);
         }
-        else if (property is "Enabled" or "Visible" && value is LiteralExpressionSyntax boolean)
+        else if (property is "Enabled" or "Visible" or "Checked" && value is LiteralExpressionSyntax boolean)
         {
             control.properties[property] = boolean.Token.ValueText == "true";
             MarkManaged(control, property);
@@ -332,6 +375,16 @@ internal static class Designer
         if (!control.managedProperties.Contains(property, StringComparer.Ordinal)) control.managedProperties.Add(property);
     }
 
+    private static string? EventHandlerName(ExpressionSyntax expression) => expression switch
+    {
+        ParenthesizedExpressionSyntax parenthesized => EventHandlerName(parenthesized.Expression),
+        CastExpressionSyntax cast => EventHandlerName(cast.Expression),
+        IdentifierNameSyntax identifier => identifier.Identifier.ValueText,
+        MemberAccessExpressionSyntax member => member.Name.Identifier.ValueText,
+        ObjectCreationExpressionSyntax creation when creation.ArgumentList?.Arguments.Count == 1 => EventHandlerName(creation.ArgumentList.Arguments[0].Expression),
+        _ => null
+    };
+
     private static string EnumMembers(ExpressionSyntax expression, string[] allowed) => string.Join("|", expression.DescendantNodesAndSelf().OfType<MemberAccessExpressionSyntax>()
         .Select(member => member.Name.Identifier.ValueText).Where(name => allowed.Contains(name, StringComparer.Ordinal)).Distinct());
 
@@ -376,7 +429,7 @@ internal static class Designer
     }
 
     private static bool IsManagedStatement(StatementSyntax statement, HashSet<string> removedNames,
-        Dictionary<string, HashSet<string>> managedProperties, HashSet<string> managedEvents)
+        Dictionary<string, HashSet<string>> managedProperties, Dictionary<string, HashSet<string>> managedEvents)
     {
         if (statement is not ExpressionStatementSyntax expressionStatement) return false;
         if (expressionStatement.Expression is AssignmentExpressionSyntax assignment)
@@ -386,11 +439,49 @@ internal static class Designer
             if ((direct is not null && removedNames.Contains(direct)) || (target is not null && removedNames.Contains(target))) return true;
             if (target is not null && managedProperties.TryGetValue(target, out var properties) && property is not null &&
                 (properties.Contains(property) || (property is "Width" or "Height" && properties.Contains("Size")))) return true;
-            if (assignment.IsKind(SyntaxKind.AddAssignmentExpression) && target is not null && property == "Click" && managedEvents.Contains(target)) return true;
+            if (assignment.IsKind(SyntaxKind.AddAssignmentExpression) && target is not null && property is not null &&
+                managedEvents.TryGetValue(target, out var events) && events.Contains(property)) return true;
         }
         if (expressionStatement.Expression is InvocationExpressionSyntax invocation)
+        {
+            var itemsControl = ItemsControlName(invocation);
+            if (itemsControl is not null && managedProperties.TryGetValue(itemsControl, out var properties) && properties.Contains("Items")) return true;
             return removedNames.Contains(AddedControlName(invocation) ?? "");
+        }
         return false;
+    }
+
+    private static string? ItemsControlName(InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is not MemberAccessExpressionSyntax method || method.Name.Identifier.ValueText is not ("Add" or "AddRange" or "Clear") ||
+            method.Expression is not MemberAccessExpressionSyntax items || items.Name.Identifier.ValueText != "Items") return null;
+        return DirectControlName(items.Expression);
+    }
+
+    private static bool TryReadItems(InvocationExpressionSyntax invocation, out List<string> items)
+    {
+        items = new List<string>();
+        if (invocation.Expression is not MemberAccessExpressionSyntax method) return false;
+        if (method.Name.Identifier.ValueText == "Clear") return invocation.ArgumentList.Arguments.Count == 0;
+        if (invocation.ArgumentList.Arguments.Count != 1) return false;
+        var expression = invocation.ArgumentList.Arguments[0].Expression;
+        if (method.Name.Identifier.ValueText == "Add")
+        {
+            if (expression is not LiteralExpressionSyntax literal || !literal.IsKind(SyntaxKind.StringLiteralExpression)) return false;
+            items.Add(literal.Token.ValueText);
+            return true;
+        }
+
+        SeparatedSyntaxList<ExpressionSyntax> expressions;
+        if (expression is ArrayCreationExpressionSyntax array && array.Initializer is not null) expressions = array.Initializer.Expressions;
+        else if (expression is ImplicitArrayCreationExpressionSyntax implicitArray) expressions = implicitArray.Initializer.Expressions;
+        else return false;
+        foreach (var item in expressions)
+        {
+            if (item is not LiteralExpressionSyntax itemLiteral || !itemLiteral.IsKind(SyntaxKind.StringLiteralExpression)) return false;
+            items.Add(itemLiteral.Token.ValueText);
+        }
+        return true;
     }
 
     private static string? AddedControlName(InvocationExpressionSyntax invocation)
@@ -441,7 +532,8 @@ internal static class Designer
             {
                 "Text" => SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(ValueString(pair.Value))).ToString(),
                 "Name" => SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(ValueString(pair.Value))).ToString(),
-                "Enabled" or "Visible" => bool.TryParse(ValueString(pair.Value), out var enabled) && enabled ? "true" : "false",
+                "ImageLocation" => SyntaxFactory.LiteralExpression(SyntaxKind.StringLiteralExpression, SyntaxFactory.Literal(ValueString(pair.Value))).ToString(),
+                "Enabled" or "Visible" or "Checked" => bool.TryParse(ValueString(pair.Value), out var enabled) && enabled ? "true" : "false",
                 "BackColor" or "ForeColor" when !string.IsNullOrWhiteSpace(ValueString(pair.Value)) => $"System.Drawing.ColorTranslator.FromHtml({SyntaxFactory.Literal(ValueString(pair.Value)).ToString()})",
                 "TabIndex" => int.TryParse(ValueString(pair.Value), out var tabIndex) && tabIndex >= 0 ? tabIndex.ToString(System.Globalization.CultureInfo.InvariantCulture) : throw new InvalidDataException("TabIndex deve ser um inteiro não negativo."),
                 "Anchor" => EnumExpression("System.Windows.Forms.AnchorStyles", ValueString(pair.Value), ["Top", "Bottom", "Left", "Right"]),
@@ -450,14 +542,29 @@ internal static class Designer
             };
             if (expression is not null) yield return ParseStatement($"this.{control.name}.{pair.Key} = {expression};");
         }
+        if (managed.Contains("Items"))
+        {
+            var json = ValueString(control.properties["Items"]);
+            var items = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+            yield return ParseStatement($"this.{control.name}.Items.Clear();");
+            if (items.Count > 0)
+            {
+                var values = string.Join(", ", items.Select(item => SyntaxFactory.Literal(item).ToString()));
+                yield return ParseStatement($"this.{control.name}.Items.AddRange(new object[] {{ {values} }});");
+            }
+        }
         if (managed.Contains("Font")) yield return CreateFontStatement($"this.{control.name}", control.properties);
     }
 
     private static IEnumerable<StatementSyntax> CreateEvents(DesignerControl control)
     {
-        if (!control.events.TryGetValue("Click", out var handler) || string.IsNullOrWhiteSpace(handler)) yield break;
-        if (!SyntaxFacts.IsValidIdentifier(handler)) throw new InvalidDataException($"Nome de handler inválido: {handler}");
-        yield return ParseStatement($"this.{control.name}.Click += this.{handler};");
+        foreach (var pair in control.events)
+        {
+            if (string.IsNullOrWhiteSpace(pair.Value)) continue;
+            if (!SyntaxFacts.IsValidIdentifier(pair.Key)) throw new InvalidDataException($"Nome de evento inválido: {pair.Key}");
+            if (!SyntaxFacts.IsValidIdentifier(pair.Value)) throw new InvalidDataException($"Nome de handler inválido: {pair.Value}");
+            yield return ParseStatement($"this.{control.name}.{pair.Key} += this.{pair.Value};");
+        }
     }
 
     private static bool PropertyBool(DesignerControl control, string key) =>
@@ -530,6 +637,7 @@ internal sealed class DesignerControl
     public Dictionary<string, string> events { get; set; } = new();
     public List<DesignerControl> children { get; set; } = new();
     public string? parent { get; set; }
+    public SizeModel? parentSize { get; set; }
     public PointModel location { get; set; } = new();
     public SizeModel size { get; set; } = new();
 }

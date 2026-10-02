@@ -1,6 +1,6 @@
 # WinForms Visual Designer for VS Code
 
-Extensão experimental para criar e editar a interface de projetos Windows Forms no VS Code Desktop. O Designer oferece toolbox (Form, Panel, Button, Label e TextBox), canvas com seleção/movimentação, oito alças de resize, snap e guias de alinhamento, preview interativo com elementos HTML nativos, árvore de controles, PropertyGrid, undo/redo e salvamento automático.
+Extensão experimental para criar e editar a interface de projetos Windows Forms no VS Code Desktop. A Toolbox inclui Form, Panel, Button, Label, TextBox, RichTextBox, CheckBox, RadioButton, ComboBox, ListBox, PictureBox, GroupBox, TabControl e DataGridView. O canvas oferece drag-and-drop em containers, seleção múltipla, oito alças, snap e guias; o preview aplica Anchor/Dock e usa widgets HTML equivalentes. **Executar Form** compila e abre o aplicativo WinForms real em uma janela nativa separada; **Encerrar** fecha esse processo.
 
 ## Executar em desenvolvimento
 
@@ -18,7 +18,7 @@ O helper Roslyn é executado com `dotnet run` e pode restaurar `Microsoft.CodeAn
 - `roslyn/`: helper .NET que analisa `InitializeComponent` com Roslyn e atualiza sintaticamente campos, inicializações, propriedades visuais e `Controls.Add`.
 - `samples/WinFormsSample/`: Form de teste com código de evento manual.
 
-O helper usa Roslyn para preservar assignments não gerenciados e handlers, atualizar propriedades de layout/cores/fontes e editar o evento `Click` sem substituir o método associado. Ele reconhece tanto corpos em bloco quanto inicializadores expression-bodied diretos. O host detecta projetos `net*-windows` com controles WinForms mesmo quando `UseWindowsForms` vem de configuração importada, detecta alterações no arquivo em disco antes de salvar, permite recarregar ou confirmar sobrescrita, e executa `dotnet build` para mostrar erros. Controles existentes de tipos ainda não suportados permanecem no código e aparecem como diagnósticos.
+O helper usa Roslyn para preservar assignments e expressões não gerenciadas, atualizar layout, cores, fontes, itens de listas e method groups de eventos WinForms sem substituir os métodos associados. Reconhece corpos em bloco e inicializadores expression-bodied diretos. O host detecta projetos `net*-windows`, observa mudanças no disco e em buffers C# abertos, permite recarregar ou confirmar salvar/sobrescrever, e executa `dotnet build` para mostrar erros. Controles existentes fora da Toolbox permanecem no código e aparecem como diagnósticos.
 
 ## Empacotar
 
@@ -26,4 +26,4 @@ Execute `npm run package` para gerar o VSIX. Para instalar, use **Extensions: In
 
 ## Limites atuais
 
-O preview usa controles HTML do Webview e não executa assemblies WinForms nem código C#; `Click` é editável e exibido no preview, mas o handler C# não é executado dentro dele. Permanecem fora do MVP a edição de eventos além de `Click`, a interpretação de todas as expressões C# possíveis (por exemplo, recursos e inicializadores complexos) e a prevenção de conflito com alterações ainda não salvas no buffer do editor. O projeto precisa compilar como WinForms para que o helper possa validar o resultado.
+O preview HTML não executa assemblies nem handlers C#; eventos comuns são editáveis e simulados como notificações visuais. Para executar a interface e handlers reais, use **Executar Form**; essa janela não pode ser incorporada ao Webview. ComboBox/ListBox leem e gravam itens literais; o DataGridView ainda usa uma grade ilustrativa, e imagens locais do PictureBox não são resolvidas pelo preview. Expressões C# de recursos, lambdas ou inicializadores complexos que Roslyn não consegue mapear são mantidas no arquivo e não são avaliadas visualmente. O projeto precisa compilar como WinForms para que o helper possa validar ou executar o resultado.

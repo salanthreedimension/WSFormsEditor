@@ -3,8 +3,11 @@
   const app = document.getElementById("app");
   const grid = 8;
   const defaults = {
-    Form: [800, 500], Panel: [240, 160], Button: [120, 36], Label: [120, 24], TextBox: [180, 28]
+    Form: [800, 500], Panel: [240, 160], Button: [120, 36], Label: [120, 24], TextBox: [180, 28],
+    RichTextBox: [220, 120], CheckBox: [120, 24], RadioButton: [120, 24], ComboBox: [160, 28], ListBox: [160, 120],
+    PictureBox: [160, 120], GroupBox: [240, 160], TabControl: [300, 200], DataGridView: [360, 200]
   };
+  const controlTypes = ["Form", "Panel", "Button", "Label", "TextBox", "RichTextBox", "CheckBox", "RadioButton", "ComboBox", "ListBox", "PictureBox", "GroupBox", "TabControl", "DataGridView"];
   let documentModel = null;
   let selected = new Set();
   let history = [];
@@ -19,6 +22,8 @@
     <header class="toolbar">
       <span class="brand">WinForms Designer</span><span class="project-name" id="project-name"></span>
       <button class="tool-action preview-toggle" id="preview" title="Alternar preview interativo">▶</button>
+      <button class="tool-action" id="run-native" title="Compilar e executar o Form real">▷</button>
+      <button class="tool-action" id="stop-native" title="Encerrar o Form" disabled>■</button>
       <button class="tool-action" id="undo" title="Desfazer (Ctrl+Z)">↶</button>
       <button class="tool-action" id="redo" title="Refazer (Ctrl+Y)">↷</button>
       <span class="hint">Snap 8px</span>
@@ -34,15 +39,18 @@
     <footer class="status" id="status"><span class="status-message" id="status-message">Abrindo arquivo...</span><span class="status-actions" id="conflict-actions" hidden><button id="reload-file">Recarregar</button><button id="overwrite-file">Sobrescrever</button></span><span id="status-size"></span></footer>`;
 
   const surface = document.getElementById("form-surface");
+  const canvasWrap = document.getElementById("canvas-wrap");
   const toolbox = document.getElementById("toolbox");
   const tree = document.getElementById("tree");
   const properties = document.getElementById("properties");
   const status = document.getElementById("status");
 
-  ["Form", "Panel", "Button", "Label", "TextBox"].forEach(type => {
+  controlTypes.forEach(type => {
     const button = document.createElement("button");
     button.className = "tool";
     button.textContent = type;
+    button.draggable = true;
+    button.addEventListener("dragstart", event => event.dataTransfer?.setData("application/x-winforms-control", type));
     button.addEventListener("click", () => {
       if (type === "Form") {
         const root = documentModel?.controls.find(item => item.type === "Form");
@@ -50,6 +58,16 @@
       } else addControl(type);
     });
     toolbox.append(button);
+  });
+  canvasWrap.addEventListener("dragover", event => { if (Array.from(event.dataTransfer?.types || []).includes("application/x-winforms-control")) event.preventDefault(); });
+  canvasWrap.addEventListener("drop", event => {
+    const type = event.dataTransfer?.getData("application/x-winforms-control");
+    if (!type || type === "Form" || previewMode) return;
+    event.preventDefault();
+    const dropTarget = event.target instanceof Element ? event.target.closest(".control.panel, .control.groupbox, .control.tabcontrol") : null;
+    const container = dropTarget ? find(dropTarget.dataset.name) : null;
+    const bounds = (dropTarget || surface).getBoundingClientRect();
+    addControl(type, null, { parent: container, location: { x: snap(event.clientX - bounds.left), y: snap(event.clientY - bounds.top) } });
   });
 
   window.addEventListener("message", event => {
@@ -65,10 +83,17 @@
       setStatus(diagnostics.length ? diagnostics.join(" | ") : "Designer carregado", diagnostics.length > 0);
     } else if (message.type === "conflict") {
       document.getElementById("conflict-actions").hidden = false;
-      setStatus("O Designer.cs mudou no disco. Recarregue ou confirme a sobrescrita.", true);
+      const detail = message.reason === "buffer"
+        ? "O buffer do Designer.cs tem alterações não salvas. Salve-o ou confirme salvar e sobrescrever."
+        : "O Designer.cs mudou no disco. Recarregue ou confirme a sobrescrita.";
+      setStatus(detail, true);
     } else if (message.type === "build") {
       const errors = message.errors || [];
       setStatus(errors.length ? errors.join(" | ") : "Build do projeto concluído sem erros", errors.length > 0);
+    } else if (message.type === "native") {
+      document.getElementById("run-native").disabled = !!message.running || !!message.building;
+      document.getElementById("stop-native").disabled = !message.running;
+      if (message.message) setStatus(message.message, false);
     } else if (message.type === "saved") {
       document.getElementById("conflict-actions").hidden = true;
       setStatus("Todas as alterações foram salvas", false);
@@ -78,6 +103,11 @@
 
   document.getElementById("undo").addEventListener("click", undo);
   document.getElementById("redo").addEventListener("click", redo);
+  document.getElementById("run-native").addEventListener("click", () => {
+    if (saveTimer) { clearTimeout(saveTimer); saveTimer = 0; vscode.postMessage({ type: "save", document: documentModel }); }
+    vscode.postMessage({ type: "run" });
+  });
+  document.getElementById("stop-native").addEventListener("click", () => vscode.postMessage({ type: "stop" }));
   document.getElementById("reload-file").addEventListener("click", () => vscode.postMessage({ type: "reload" }));
   document.getElementById("overwrite-file").addEventListener("click", () => {
     document.getElementById("conflict-actions").hidden = true;
@@ -103,6 +133,10 @@
     return list;
   }
   function find(name) { return allControls().find(control => control.name === name); }
+  function controlItems(control) {
+    try { const items = JSON.parse(control.properties?.Items || "[]"); return Array.isArray(items) ? items.map(String) : []; }
+    catch { return []; }
+  }
   function escapeHtml(value) { return String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
   function snap(value) { return Math.max(0, Math.round(value / grid) * grid); }
   function checkpoint() { history.push(JSON.stringify(documentModel)); if (history.length > 100) history.shift(); future = []; }
@@ -112,23 +146,35 @@
     saveTimer = setTimeout(() => vscode.postMessage({ type: "save", document: documentModel }), 300);
   }
   function setStatus(message, error) { const item = document.getElementById("status-message"); item.textContent = message; item.title = message; status.classList.toggle("error", !!error); }
-  function addControl(type, copy) {
+  function addControl(type, copy, placement) {
     if (!documentModel) return;
     checkpoint();
     const used = new Set(allControls().map(item => item.name));
-    let index = 1; while (used.has(`${type.toLowerCase()}${index}`)) index++;
-    const name = `${type.toLowerCase()}${index}`;
+    const nextName = controlType => { let index = 1; while (used.has(`${controlType.toLowerCase()}${index}`)) index++; const generated = `${controlType.toLowerCase()}${index}`; used.add(generated); return generated; };
+    const name = nextName(type);
     const dims = defaults[type] || defaults.Button;
+    const form = documentModel.controls.find(item => item.type === "Form");
+    const parent = placement?.parent || form;
     const control = copy ? JSON.parse(JSON.stringify(copy)) : {
       type, name,
       properties: { Name: name, Text: type === "Button" ? "button" : type === "Label" ? "label" : "", Enabled: true, Visible: true },
       managedProperties: ["Location", "Size", "Name", "Text", "Enabled", "Visible"],
       events: { Click: "" },
-      children: [], parent: null, location: { x: 24, y: 24 }, size: { width: dims[0], height: dims[1] }
+      children: [], parent: null, location: placement?.location || { x: 24, y: 24 }, size: { width: dims[0], height: dims[1] }
     };
-    if (copy) control.name = name;
-    const form = documentModel.controls.find(item => item.type === "Form");
-    (form ? form.children : documentModel.controls).push(control);
+    const setTreeNames = (item, parentControl) => {
+      item.name = item === control ? name : nextName(item.type);
+      item.properties ||= {};
+      item.properties.Name = item.name;
+      item.parent = parentControl && parentControl.type !== "Form" ? parentControl.name : null;
+      item.parentSize = { width: parentControl?.size?.width || form?.size?.width || 800, height: parentControl?.size?.height || form?.size?.height || 500 };
+      (item.children || []).forEach(child => setTreeNames(child, item));
+    };
+    if (copy) setTreeNames(control, parent);
+    control.parent = parent && parent.type !== "Form" ? parent.name : null;
+    control.parentSize = { width: parent?.size?.width || form?.size?.width || 800, height: parent?.size?.height || form?.size?.height || 500 };
+    if (placement?.location) control.location = placement.location;
+    (parent ? parent.children : documentModel.controls).push(control);
     selected = new Set([control.name]); render(); scheduleSave();
   }
   function render() {
@@ -144,19 +190,48 @@
     surface.classList.toggle("preview-mode", previewMode);
     const guideX = document.createElement("div"); guideX.className = "guide vertical"; guideX.hidden = true; surface.append(guideX);
     const guideY = document.createElement("div"); guideY.className = "guide horizontal"; guideY.hidden = true; surface.append(guideY);
-    (form?.children || documentModel.controls.filter(item => item.type !== "Form")).forEach(control => renderControl(control, surface));
+    (form?.children || documentModel.controls.filter(item => item.type !== "Form")).forEach(control => renderControl(control, surface, form?.size || { width, height }));
     renderTree(); renderProperties();
     document.getElementById("status-size").textContent = `${width} × ${height}px`;
   }
-  function renderControl(control, parent) {
-    const tag = previewMode ? ({ Button: "button", Label: "label", TextBox: "input", Panel: "div" }[control.type] || "div") : "div";
+  function renderControl(control, parent, parentSize) {
+    const toggleControl = previewMode && ["CheckBox", "RadioButton"].includes(control.type);
+    const previewTags = { Button: "button", Label: "label", TextBox: "input", RichTextBox: "textarea", ComboBox: "select", ListBox: "select", PictureBox: "img", GroupBox: "fieldset", DataGridView: "table" };
+    const tag = previewMode && !toggleControl ? (previewTags[control.type] || "div") : "div";
     const element = document.createElement(tag);
     element.className = `control ${control.type.toLowerCase()}${selected.has(control.name) ? " selected" : ""}${selected.has(control.name) && [...selected][0] === control.name ? " primary-selection" : ""}`;
     element.dataset.name = control.name;
-    element.style.left = `${control.location?.x || 0}px`; element.style.top = `${control.location?.y || 0}px`;
-    element.style.width = `${control.size?.width || 100}px`; element.style.height = `${control.size?.height || 28}px`;
-    if (control.type === "TextBox" && previewMode) element.value = String(control.properties?.Text ?? "");
-    else element.textContent = String(control.properties?.Text ?? control.name);
+    const bounds = previewMode ? previewBounds(control, parentSize) : { ...control.location, ...control.size };
+    element.style.left = `${bounds.x || 0}px`; element.style.top = `${bounds.y || 0}px`;
+    element.style.width = `${bounds.width || 100}px`; element.style.height = `${bounds.height || 28}px`;
+    const controlText = String(control.properties?.Text ?? control.name);
+    let eventTarget = element;
+    if (previewMode && ["TextBox", "RichTextBox"].includes(control.type)) element.value = String(control.properties?.Text ?? "");
+    else if (toggleControl) {
+      element.classList.add("toggle-control");
+      element.textContent = "";
+      const input = document.createElement("input"); input.type = control.type === "CheckBox" ? "checkbox" : "radio";
+      input.checked = control.properties?.Checked === true;
+      const caption = document.createElement("span"); caption.textContent = controlText;
+      element.append(input, caption); eventTarget = input;
+    } else if (previewMode && ["ComboBox", "ListBox"].includes(control.type)) {
+      element.textContent = "";
+      const options = controlItems(control);
+      options.forEach((text, index) => { const option = document.createElement("option"); option.textContent = text; option.value = text; if (index === 0) option.selected = true; element.append(option); });
+      if (control.type === "ListBox") element.size = 4;
+    } else if (previewMode && control.type === "PictureBox") {
+      element.alt = controlText;
+      if (control.properties?.ImageLocation) element.src = String(control.properties.ImageLocation);
+    } else if (previewMode && control.type === "GroupBox") {
+      const legend = document.createElement("legend"); legend.textContent = controlText; element.append(legend);
+    } else if (previewMode && control.type === "DataGridView") {
+      const header = document.createElement("thead"), headerRow = document.createElement("tr");
+      ["Column 1", "Column 2", "Column 3"].forEach(text => { const cell = document.createElement("th"); cell.textContent = text; headerRow.append(cell); });
+      header.append(headerRow); element.append(header);
+      const body = document.createElement("tbody");
+      for (let rowIndex = 0; rowIndex < 3; rowIndex++) { const row = document.createElement("tr"); for (let column = 0; column < 3; column++) { const cell = document.createElement("td"); cell.textContent = rowIndex === 0 && column === 0 ? controlText : ""; row.append(cell); } body.append(row); }
+      element.append(body);
+    } else if (!(previewMode && ["ComboBox", "ListBox", "PictureBox"].includes(control.type))) element.textContent = controlText;
     element.style.color = String(control.properties?.ForeColor || "");
     if (control.properties?.BackColor) element.style.backgroundColor = String(control.properties.BackColor);
     if (control.properties?.FontFamily) element.style.fontFamily = String(control.properties.FontFamily);
@@ -169,8 +244,11 @@
     if (!previewMode) {
       element.addEventListener("pointerdown", event => beginPointer(event, control, element, "move"));
       element.addEventListener("click", event => { event.stopPropagation(); if (!event.shiftKey && !selected.has(control.name)) selected.clear(); selected.add(control.name); render(); });
-    } else if (control.events?.Click) {
-      element.addEventListener("click", () => setStatus(`Evento Click: ${control.events.Click}`, false));
+    } else {
+      const browserEvents = { Click: "click", DoubleClick: "dblclick", MouseEnter: "mouseenter", MouseLeave: "mouseleave", TextChanged: "input", CheckedChanged: "change", SelectedIndexChanged: "change" };
+      Object.entries(control.events || {}).forEach(([name, handler]) => {
+        if (browserEvents[name]) eventTarget.addEventListener(browserEvents[name], () => setStatus(`Evento ${name}: ${handler}`, false));
+      });
     }
     if (!previewMode && selected.has(control.name)) {
       ["nw", "n", "ne", "e", "se", "s", "sw", "w"].forEach(position => {
@@ -179,7 +257,25 @@
       });
     }
     parent.append(element);
-    (control.children || []).forEach(child => renderControl(child, element));
+    (control.children || []).forEach(child => renderControl(child, element, { width: bounds.width, height: bounds.height }));
+  }
+  function previewBounds(control, parentSize) {
+    const bounds = { x: control.location.x, y: control.location.y, width: control.size.width, height: control.size.height };
+    const parent = parentSize || control.parentSize || { width: 800, height: 500 };
+    const dock = control.properties?.Dock || "None";
+    if (dock === "Fill") return { x: 0, y: 0, width: parent.width, height: parent.height };
+    if (dock === "Top") return { ...bounds, x: 0, y: 0, width: parent.width };
+    if (dock === "Bottom") return { ...bounds, x: 0, y: parent.height - bounds.height, width: parent.width };
+    if (dock === "Left") return { ...bounds, x: 0, y: 0, height: parent.height };
+    if (dock === "Right") return { ...bounds, x: parent.width - bounds.width, y: 0, height: parent.height };
+    const base = control.parentSize || parent;
+    const anchor = new Set(String(control.properties?.Anchor || "Top, Left").split(/[,|]/).map(item => item.trim()));
+    const widthDelta = parent.width - base.width, heightDelta = parent.height - base.height;
+    if (anchor.has("Right") && !anchor.has("Left")) bounds.x += widthDelta;
+    if (anchor.has("Left") && anchor.has("Right")) bounds.width += widthDelta;
+    if (anchor.has("Bottom") && !anchor.has("Top")) bounds.y += heightDelta;
+    if (anchor.has("Top") && anchor.has("Bottom")) bounds.height += heightDelta;
+    return bounds;
   }
   function renderTree() {
     tree.innerHTML = "";
@@ -205,6 +301,13 @@
       input.addEventListener("change", () => { checkpoint(); updateProperty(control, key, numeric ? Math.max(0, Number(input.value) || 0) : input.value); render(); scheduleSave(); });
       row.append(caption, input); properties.append(row);
     };
+    const addTextArea = (label, value, key) => {
+      const row = document.createElement("div"); row.className = "property-row property-row-multiline";
+      const caption = document.createElement("label"); caption.textContent = label;
+      const input = document.createElement("textarea"); input.rows = 4; input.value = value;
+      input.addEventListener("change", () => { checkpoint(); updateProperty(control, key, input.value); render(); scheduleSave(); });
+      row.append(caption, input); properties.append(row);
+    };
     const addSelect = (label, values, key, value) => {
       const row = document.createElement("div"); row.className = "property-row";
       const caption = document.createElement("label"); caption.textContent = label;
@@ -222,7 +325,7 @@
       row.append(caption, input); properties.append(row);
     };
     addGroup("Design"); addField("(Name)", control.properties?.Name ?? control.name, "Name");
-    if (control.type !== "Panel") addField("Text", control.properties?.Text ?? "", "Text");
+    if (!["Panel", "PictureBox", "DataGridView"].includes(control.type)) addField("Text", control.properties?.Text ?? "", "Text");
     addGroup("Layout"); addField("Location.X", control.location.x, "X", true); addField("Location.Y", control.location.y, "Y", true);
     addField("Size.Width", control.size.width, "Width", true); addField("Size.Height", control.size.height, "Height", true);
     if (control.type !== "Form") {
@@ -231,6 +334,8 @@
       addField("TabIndex", control.properties?.TabIndex ?? 0, "TabIndex", true);
     }
     addGroup("Appearance"); addColor("BackColor", "BackColor"); addColor("ForeColor", "ForeColor");
+    if (control.type === "PictureBox") addField("ImageLocation", control.properties?.ImageLocation ?? "", "ImageLocation");
+    if (["ComboBox", "ListBox"].includes(control.type)) addTextArea("Items", controlItems(control).join("\n"), "Items");
     addField("Font family", control.properties?.FontFamily ?? "Segoe UI", "FontFamily");
     addField("Font size", control.properties?.FontSize ?? 9, "FontSize", true);
     ["FontBold", "FontItalic", "FontUnderline", "FontStrikeout"].forEach(key => {
@@ -240,9 +345,14 @@
       input.addEventListener("change", () => { checkpoint(); control.properties[key] = input.checked; if (!control.properties.FontFamily) control.properties.FontFamily = "Segoe UI"; if (!control.properties.FontSize) control.properties.FontSize = 9; markManaged(control, "Font"); render(); scheduleSave(); });
       row.append(label, input); properties.append(row);
     });
-    if (control.type !== "Form") { addGroup("Events"); addField("Click", control.events?.Click ?? "", "event:Click"); }
+    if (control.type !== "Form") {
+      addGroup("Events");
+      const eventNames = new Set(["Click", "DoubleClick", "MouseEnter", "MouseLeave", "TextChanged", "CheckedChanged", "SelectedIndexChanged", ...Object.keys(control.events || {})]);
+      eventNames.forEach(eventName => addField(eventName, control.events?.[eventName] ?? "", `event:${eventName}`));
+    }
     addGroup("Behavior");
-    ["Enabled", "Visible"].forEach(key => {
+    const behaviorProperties = ["Enabled", "Visible", ...(["CheckBox", "RadioButton"].includes(control.type) ? ["Checked"] : [])];
+    behaviorProperties.forEach(key => {
       const row = document.createElement("div"); row.className = "property-row";
       const label = document.createElement("label"); label.textContent = key;
       const input = document.createElement("input"); input.type = "checkbox"; input.checked = control.properties[key] !== false;
@@ -254,8 +364,12 @@
     if (key === "Name") {
       control.properties.Name = String(value);
       markManaged(control, "Name");
-    } else if (key === "event:Click") {
-      control.events.Click = String(value).trim();
+    } else if (key.startsWith("event:")) {
+      const eventName = key.slice("event:".length);
+      control.events[eventName] = String(value).trim();
+    } else if (key === "Items") {
+      control.properties.Items = JSON.stringify(String(value).split(/\r?\n/).filter(item => item.length > 0));
+      markManaged(control, "Items");
     } else if (key === "X" || key === "Y") { control.location[key.toLowerCase()] = value; markManaged(control, "Location"); }
     else if (key === "Width" || key === "Height") { control.size[key.toLowerCase()] = value; markManaged(control, "Size"); }
     else {
@@ -273,7 +387,8 @@
     event.stopPropagation();
     if (event.shiftKey) selected.add(control.name);
     else if (!selected.has(control.name)) selected = new Set([control.name]);
-    pointerAction = { action, handle, startX: event.clientX, startY: event.clientY, snapshots: [...selected].map(name => { const item = find(name); return { name, x: item.location.x, y: item.location.y, width: item.size.width, height: item.size.height }; }) };
+    const targetNames = action === "resize" ? [control.name] : [...selected];
+    pointerAction = { action, handle, startX: event.clientX, startY: event.clientY, snapshots: targetNames.map(name => { const item = find(name); return { name, x: item.location.x, y: item.location.y, width: item.size.width, height: item.size.height }; }) };
     checkpoint(); surface.setPointerCapture(event.pointerId); render();
   }
   function movePointer(event) {

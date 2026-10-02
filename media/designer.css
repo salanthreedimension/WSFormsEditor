@@ -43,6 +43,17 @@ button:hover { border-color: var(--accent); }
 .control.button { border: 1px solid #8e9995; border-radius: 2px; background: linear-gradient(#fff, #e7eae8); box-shadow: 0 1px 1px #0002; }
 .control.label { justify-content: flex-start; }
 .control.textbox { justify-content: flex-start; padding: 0 5px; border: 1px solid #929b98; background: #fff; box-shadow: inset 0 1px 2px #0001; }
+.control.richtextbox { display: block; padding: 5px; border: 1px solid #929b98; background: #fff; resize: none; text-align: left; }
+.control.combobox, .control.listbox { display: block; padding: 2px 5px; border: 1px solid #929b98; background: #fff; text-align: left; }
+.control.picturebox { display: block; border: 1px solid #929b98; background: #e9edeb; object-fit: contain; }
+.control.groupbox { display: block; min-inline-size: 0; padding: 8px; border: 1px solid #929b98; text-align: left; }
+.control.groupbox legend { padding: 0 4px; }
+.control.toggle-control { display: flex; justify-content: flex-start; gap: 6px; cursor: pointer; }
+.control.toggle-control input { width: 14px; height: 14px; flex: none; accent-color: #168b70; }
+.control.tabcontrol { align-items: flex-start; justify-content: flex-start; border: 1px solid #929b98; background: #fff; }
+.control.datagridview { display: table; border-collapse: collapse; border: 1px solid #929b98; background: #fff; text-align: left; }
+.control.datagridview th, .control.datagridview td { padding: 4px 7px; border: 1px solid #c2c9c6; }
+.control.datagridview th { background: #e7ece9; }
 .control.panel { border: 1px solid #a8b0ad; background: #ffffff66; }
 .control.design-hidden { opacity: .48; outline: 1px dashed #6d7774; }
 .resize-handle { position: absolute; z-index: 4; width: 7px; height: 7px; background: #fff; border: 1px solid #087c62; }
@@ -60,6 +71,7 @@ button:hover { border-color: var(--accent); }
 .form-surface.preview-mode .control.button { color: buttontext; font: 400 13px "Segoe UI", sans-serif; }
 .form-surface.preview-mode .control.textbox { display: block; color: fieldtext; font: 400 13px "Segoe UI", sans-serif; }
 .form-surface.preview-mode .control.label { font: 400 13px "Segoe UI", sans-serif; }
+.form-surface.preview-mode .control.toggle-control { font: 400 13px "Segoe UI", sans-serif; }
 .guide { position: absolute; pointer-events: none; background: #e34853; z-index: 5; }
 .guide.vertical { width: 1px; top: 0; bottom: 0; }
 .guide.horizontal { height: 1px; left: 0; right: 0; }
@@ -67,6 +79,8 @@ button:hover { border-color: var(--accent); }
 .property-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); align-items: center; min-height: 31px; gap: 6px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
 .property-row label { color: var(--muted); font-size: 11px; }
 .property-row input, .property-row select { width: 100%; min-width: 0; height: 23px; padding: 2px 5px; border: 1px solid var(--border); border-radius: 2px; background: var(--surface-raised); }
+.property-row textarea { width: 100%; min-width: 0; resize: vertical; padding: 4px 5px; border: 1px solid var(--border); border-radius: 2px; background: var(--surface-raised); color: var(--text); font: inherit; }
+.property-row-multiline { align-items: start; padding: 5px 0; }
 .property-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); }
 .property-row input[type="color"] { padding: 1px 2px; }
 .property-group { margin: 12px 0 4px; color: var(--accent); font-size: 11px; font-weight: 650; }
