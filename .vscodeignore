@@ -7,3 +7,4 @@ roslyn/bin/**
 roslyn/obj/**
 **/*.ts
 **/*.map
+docs/designer-demo.html

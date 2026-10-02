@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="../media/designer.css">
+  <title>WinForms Designer screenshots</title>
+  <style>
+    :root {
+      --vscode-sideBar-background: #25282a;
+      --vscode-editor-background: #1d2022;
+      --vscode-panel-border: #41474a;
+      --vscode-foreground: #e1e4e5;
+      --vscode-descriptionForeground: #a0a7aa;
+    }
+    body { color-scheme: dark; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const documentModel = {
+      formName: "CustomerForm",
+      diagnostics: [],
+      controls: [{
+        type: "Form", name: "CustomerForm", properties: { Name: "CustomerForm", Text: "Customer profile", FontFamily: "Segoe UI", FontSize: 9 },
+        managedProperties: ["Name", "Text", "Font"], events: {}, children: [], parent: null,
+        location: { x: 0, y: 0 }, size: { width: 420, height: 500 }
+      }]
+    };
+    const form = documentModel.controls[0];
+    const control = (type, name, text, x, y, width, height, extra = {}) => ({
+      type, name, properties: { Name: name, Text: text, Enabled: true, Visible: true, ...extra.properties },
+      managedProperties: ["Location", "Size", "Name", "Text", "Enabled", "Visible", ...Object.keys(extra.properties || {})],
+      events: extra.events || {}, children: [], parent: null, parentSize: { width: 420, height: 500 },
+      location: { x, y }, size: { width, height }
+    });
+    form.children.push(
+      control("Label", "headingLabel", "Customer profile", 28, 24, 320, 34, { properties: { FontFamily: "Segoe UI", FontSize: 18, FontBold: true, ForeColor: "#25282A" } }),
+      control("Label", "nameLabel", "Company name", 28, 76, 160, 24),
+      control("TextBox", "companyTextBox", "Northwind Traders", 28, 104, 360, 34),
+      control("Label", "regionLabel", "Region", 28, 150, 120, 24),
+      control("ComboBox", "regionComboBox", "", 28, 178, 360, 34, { properties: { Items: JSON.stringify(["North America", "Europe", "Asia Pacific"]) } }),
+      control("CheckBox", "activeCheckBox", "Active account", 28, 228, 180, 28, { properties: { Checked: true }, events: { CheckedChanged: "activeCheckBox_CheckedChanged" } }),
+      control("GroupBox", "contactGroupBox", "Contact details", 28, 276, 360, 116),
+      control("Label", "emailLabel", "Email", 42, 302, 90, 24),
+      control("TextBox", "emailTextBox", "hello@northwind.example", 42, 330, 320, 34),
+      control("Button", "saveButton", "Save changes", 28, 432, 140, 40, { properties: { BackColor: "#24836F", ForeColor: "#FFFFFF", FontBold: true }, events: { Click: "saveButton_Click" } }),
+      control("Button", "cancelButton", "Cancel", 184, 432, 120, 40)
+    );
+    window.acquireVsCodeApi = () => ({
+      postMessage(message) {
+        if (message.type === "ready") setTimeout(() => window.dispatchEvent(new MessageEvent("message", {
+          data: { type: "load", document: documentModel, project: "CustomerApp" }
+        })), 0);
+        if (message.type === "save") setTimeout(() => window.dispatchEvent(new MessageEvent("message", { data: { type: "saved" } })), 0);
+        if (message.type === "run") setTimeout(() => window.dispatchEvent(new MessageEvent("message", { data: { type: "build", errors: [] } })), 0);
+      },
+      getState: () => null,
+      setState: () => {}
+    });
+  </script>
+  <script src="../media/designer.js"></script>
+</body>
+</html>
