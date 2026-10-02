@@ -33,7 +33,7 @@
         <div class="section-title">Toolbox</div><div class="tool-list" id="toolbox"></div>
         <div class="section-title">Document Outline</div><div class="tree" id="tree"></div>
       </aside>
-      <section class="canvas-wrap" id="canvas-wrap"><div class="form-surface" id="form-surface"></div></section>
+      <section class="canvas-wrap" id="canvas-wrap"><div class="form-surface" id="form-surface"></div><div class="readonly-notice" id="readonly-notice" hidden></div></section>
       <aside class="sidebar rightbar"><div class="section-title">Properties</div><div id="properties" class="properties"></div></aside>
     </main>
     <footer class="status" id="status"><span class="status-message" id="status-message">Loading designer...</span><span class="status-actions" id="conflict-actions" hidden><button id="reload-file">Reload</button><button id="overwrite-file">Save and overwrite</button></span><span id="status-size"></span></footer>`;
@@ -77,8 +77,16 @@
       documentModel = message.document;
       projectName = message.project || "";
       document.getElementById("project-name").textContent = projectName;
-      selected.clear(); render();
       const diagnostics = documentModel.diagnostics || [];
+      const readOnly = documentModel.readOnly === true;
+      app.classList.toggle("read-only", readOnly);
+      const notice = document.getElementById("readonly-notice");
+      notice.hidden = !readOnly;
+      notice.textContent = diagnostics.join(" | ");
+      selected = readOnly
+        ? new Set([documentModel.controls.find(item => item.type === "Form")?.name || documentModel.formName])
+        : new Set();
+      render();
       document.getElementById("conflict-actions").hidden = true;
       setStatus(diagnostics.length ? diagnostics.join(" | ") : "Designer ready", diagnostics.length > 0);
     } else if (message.type === "conflict") {
@@ -141,13 +149,14 @@
   function snap(value) { return Math.max(0, Math.round(value / grid) * grid); }
   function checkpoint() { history.push(JSON.stringify(documentModel)); if (history.length > 100) history.shift(); future = []; }
   function scheduleSave() {
+    if (documentModel?.readOnly) return;
     setStatus("Saving Designer.cs...", false);
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => vscode.postMessage({ type: "save", document: documentModel }), 300);
   }
   function setStatus(message, error) { const item = document.getElementById("status-message"); item.textContent = message; item.title = message; status.classList.toggle("error", !!error); }
   function addControl(type, copy, placement) {
-    if (!documentModel) return;
+    if (!documentModel || documentModel.readOnly) return;
     checkpoint();
     const used = new Set(allControls().map(item => item.name));
     const nextName = controlType => { let index = 1; while (used.has(`${controlType.toLowerCase()}${index}`)) index++; const generated = `${controlType.toLowerCase()}${index}`; used.add(generated); return generated; };
@@ -361,6 +370,7 @@
     });
   }
   function updateProperty(control, key, value) {
+    if (documentModel?.readOnly) return;
     if (key === "Name") {
       control.properties.Name = String(value);
       markManaged(control, "Name");
@@ -383,7 +393,7 @@
     if (!control.managedProperties.includes(property)) control.managedProperties.push(property);
   }
   function beginPointer(event, control, element, action, handle = "se") {
-    if (event.button !== 0) return;
+    if (documentModel?.readOnly || event.button !== 0) return;
     event.stopPropagation();
     if (event.shiftKey) selected.add(control.name);
     else if (!selected.has(control.name)) selected = new Set([control.name]);
@@ -426,6 +436,7 @@
   function undo() { if (!history.length) return; future.push(JSON.stringify(documentModel)); documentModel = JSON.parse(history.pop()); selected.clear(); render(); scheduleSave(); }
   function redo() { if (!future.length) return; history.push(JSON.stringify(documentModel)); documentModel = JSON.parse(future.pop()); selected.clear(); render(); scheduleSave(); }
   function onKeyDown(event) {
+    if (documentModel?.readOnly) return;
     if (event.target instanceof HTMLInputElement) return;
     const key = event.key.toLowerCase();
     if (event.ctrlKey && key === "z") { event.preventDefault(); undo(); }

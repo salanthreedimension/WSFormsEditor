@@ -17,6 +17,7 @@ export interface DesignerDocument {
   formName: string;
   controls: DesignerControl[];
   diagnostics: string[];
+  readOnly?: boolean;
 }
 
 export type DesignerMessage =

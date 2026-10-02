@@ -29,6 +29,7 @@ O WinForms Visual Designer adiciona uma superfície visual a projetos Windows Fo
 - Preview HTML interativo e execução opcional do Form WinForms real em uma janela nativa separada.
 - Sincronização Roslyn que substitui somente atribuições reconhecidas ou alteradas e preserva expressões C# que não consegue mapear.
 - Proteção para mudanças externas no arquivo e buffers de layout não salvos; validação com `dotnet build`.
+- Edição de controles existentes quando o layout está no `InitializeComponent()` padrão.
 
 ### Requisitos
 
@@ -37,10 +38,11 @@ O WinForms Visual Designer adiciona uma superfície visual a projetos Windows Fo
 - Node.js e npm somente para desenvolver ou empacotar a extensão a partir do código-fonte.
 - Projeto SDK-style com `UseWindowsForms=true`, ou Target Framework `*-windows` e tipos WinForms reconhecíveis no arquivo Designer.
 - Um projeto SDK-style e um arquivo `.cs` que contenha `InitializeComponent()` em bloco ou expressão direta. O layout pode estar no mesmo arquivo, em `Form.Designer.cs` ou ser aberto diretamente pelo arquivo Designer.
+- Interfaces criadas proceduralmente fora de `InitializeComponent()` são identificadas como somente leitura, com aviso no canvas, para evitar sobrescrever ou duplicar código personalizado.
 
 ### Instalação
 
-1. Baixe `winforms-visual-designer-0.1.0.vsix` na página [Releases](https://github.com/salanthreedimension/WSFormsEditor/releases).
+1. Baixe `winforms-visual-designer-0.1.1.vsix` na página [Releases](https://github.com/salanthreedimension/WSFormsEditor/releases).
 2. No VS Code, abra **Extensions** > `...` > **Install from VSIX...**.
 3. Selecione o arquivo `.vsix` e recarregue a janela do VS Code quando solicitado.
 
@@ -104,6 +106,7 @@ O Extension Host e o Webview comunicam-se por mensagens JSON. O modelo visual co
 - O preview do DataGridView é ilustrativo. PictureBox aceita `ImageLocation` no modelo, mas o caminho de imagem não é resolvido no preview.
 - ComboBox/ListBox editam coleções de strings literais; expressões com recursos, inicializadores ou lambdas que não possam ser mapeados são preservadas no código e não avaliadas visualmente.
 - A Toolbox define os tipos criáveis no momento; os tipos WinForms ainda não catalogados são mantidos no arquivo e reportados como diagnósticos.
+- Layouts construídos por código fora de `InitializeComponent()` ainda não podem ser editados visualmente. Eles são identificados como somente leitura e exibem um aviso no canvas para proteger o código existente.
 - Os eventos são gravados como method groups. O método handler deve existir no código parcial do Form e ter uma assinatura compatível; o preview não executa o C# do handler.
 - A validação exige um projeto WinForms compilável e o SDK .NET disponível no PATH.
 
@@ -130,6 +133,7 @@ WinForms Visual Designer adds a visual editing surface to C# Windows Forms proje
 - Interactive HTML preview and optional execution of the real WinForms Form in a separate native window.
 - Roslyn updates only recognized or edited assignments and preserves C# expressions it cannot map.
 - Protection against external file changes and dirty layout-file buffers; project validation through `dotnet build`.
+- Existing controls can be edited when their layout is declared in the standard `InitializeComponent()` method.
 
 ### Requirements
 
@@ -138,10 +142,11 @@ WinForms Visual Designer adds a visual editing surface to C# Windows Forms proje
 - Node.js and npm only when developing or packaging the extension from source.
 - An SDK-style project with `UseWindowsForms=true`, or a `*-windows` target framework and recognizable WinForms types in the paired Designer file.
 - An SDK-style project and a `.cs` file containing a block-bodied or direct expression-bodied `InitializeComponent()`. The layout may be in the same file, in `Form.Designer.cs`, or opened directly from the Designer file.
+- Interfaces built procedurally outside `InitializeComponent()` are detected as read-only and display a canvas warning to prevent overwriting or duplicating custom code.
 
 ### Install
 
-1. Download `winforms-visual-designer-0.1.0.vsix` from the [Releases](https://github.com/salanthreedimension/WSFormsEditor/releases) page.
+1. Download `winforms-visual-designer-0.1.1.vsix` from the [Releases](https://github.com/salanthreedimension/WSFormsEditor/releases) page.
 2. In VS Code, open **Extensions** > `...` > **Install from VSIX...**.
 3. Select the `.vsix` file and reload VS Code when prompted.
 
@@ -205,5 +210,6 @@ The Extension Host and Webview communicate through JSON messages. The UI model s
 - DataGridView preview content is illustrative. PictureBox stores `ImageLocation`, but local image paths are not resolved in the Webview preview.
 - ComboBox/ListBox edit literal string collections. Resource expressions, complex initializers, and lambdas that cannot be mapped are preserved in code but not evaluated visually.
 - The Toolbox defines which control types can currently be created. Existing WinForms types not yet cataloged are preserved and reported as diagnostics.
+- Layouts built in code outside `InitializeComponent()` cannot yet be edited visually. They are detected as read-only and display a canvas warning to protect existing code.
 - Events are written as method groups. Their methods must exist in the Form's partial class with compatible signatures; preview does not execute C# handlers.
 - Validation requires a buildable WinForms project and a .NET SDK available on PATH.

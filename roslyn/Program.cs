@@ -16,7 +16,8 @@ try
     var source = await File.ReadAllTextAsync(sourcePath);
     if (args[0] == "read")
     {
-        Console.WriteLine(JsonSerializer.Serialize(Designer.Read(source), jsonOptions));
+        var codeBehind = args.Length > 2 ? await File.ReadAllTextAsync(Path.GetFullPath(args[2])) : null;
+        Console.WriteLine(JsonSerializer.Serialize(Designer.Read(source, codeBehind), jsonOptions));
         return 0;
     }
 
@@ -26,6 +27,7 @@ try
         var payload = await reader.ReadToEndAsync();
         var model = JsonSerializer.Deserialize<DesignerDocument>(payload, jsonOptions)
             ?? throw new InvalidDataException("The designer document is empty.");
+        if (model.readOnly) throw new InvalidOperationException("This form is built dynamically outside InitializeComponent() and cannot be safely edited by the visual designer.");
         await File.WriteAllTextAsync(sourcePath, Designer.Write(source, model));
         return 0;
     }
@@ -56,7 +58,7 @@ internal static class Designer
         ["System.Windows.Forms.DataGridView"] = "DataGridView"
     };
 
-    public static DesignerDocument Read(string source)
+    public static DesignerDocument Read(string source, string? codeBehind = null)
     {
         var root = CSharpSyntaxTree.ParseText(source).GetCompilationUnitRoot();
         var type = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
@@ -157,9 +159,43 @@ internal static class Designer
             else if (assignment.Left is MemberAccessExpressionSyntax formProperty && formProperty.Expression is ThisExpressionSyntax)
                 ReadProperty(form, formProperty.Name.Identifier.ValueText, assignment.Right);
         }
+            var readOnly = TryReadCustomLayout(form, codeBehind, diagnostics);
             SetParentSizes(form);
 
-        return new DesignerDocument { formName = type.Identifier.ValueText, controls = new List<DesignerControl> { form }, diagnostics = diagnostics };
+        return new DesignerDocument { formName = type.Identifier.ValueText, controls = new List<DesignerControl> { form }, diagnostics = diagnostics, readOnly = readOnly };
+    }
+
+    private static bool TryReadCustomLayout(DesignerControl form, string? codeBehind, List<string> diagnostics)
+    {
+        if (string.IsNullOrWhiteSpace(codeBehind)) return false;
+
+        var root = CSharpSyntaxTree.ParseText(codeBehind).GetCompilationUnitRoot();
+        var type = root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+            .FirstOrDefault(candidate => candidate.Identifier.ValueText == form.name);
+        if (type is null) return false;
+
+        var layoutMethods = type.Members.OfType<MethodDeclarationSyntax>()
+            .Where(method => method.Identifier.ValueText != "InitializeComponent" && method.Body is not null)
+            .Where(method =>
+                method.DescendantNodes().OfType<ObjectCreationExpressionSyntax>().Any(creation =>
+                {
+                    var name = creation.Type.ToString();
+                    var simple = name.Split('.').Last();
+                    return SupportedTypes.ContainsKey(name) || SupportedTypes.ContainsKey(simple);
+                }) &&
+                method.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(invocation =>
+                    invocation.Expression is MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Add", Expression: MemberAccessExpressionSyntax { Name.Identifier.ValueText: "Controls" } }))
+            .ToList();
+        if (layoutMethods.Count == 0) return false;
+
+        foreach (var assignment in layoutMethods.SelectMany(method => method.DescendantNodes().OfType<AssignmentExpressionSyntax>()))
+        {
+            if (assignment.Left is MemberAccessExpressionSyntax { Expression: ThisExpressionSyntax } property)
+                ReadProperty(form, property.Name.Identifier.ValueText, assignment.Right);
+        }
+
+        diagnostics.Add("This form creates its controls in custom code outside InitializeComponent(). The layout is shown as read-only because saving visual edits could overwrite or duplicate that code.");
+        return true;
     }
 
     public static string Write(string source, DesignerDocument model)
@@ -626,6 +662,7 @@ internal sealed class DesignerDocument
     public string formName { get; set; } = "Form1";
     public List<DesignerControl> controls { get; set; } = new();
     public List<string> diagnostics { get; set; } = new();
+    public bool readOnly { get; set; }
 }
 
 internal sealed class DesignerControl

@@ -52,6 +52,7 @@ export function activate(context: vscode.ExtensionContext): void {
       let saveQueue: Promise<void> = Promise.resolve();
       let suppressDesignerWatchUntil = 0;
       let lastDesignerHash = "";
+      let designerReadOnly = false;
       let buildTimer: ReturnType<typeof setTimeout> | undefined;
       let nativeProcess: ChildProcess | undefined;
       let panelDisposed = false;
@@ -68,6 +69,10 @@ export function activate(context: vscode.ExtensionContext): void {
         } else if (message.type === "save") {
           saveQueue = saveQueue.then(async () => {
             try {
+              if (designerReadOnly) {
+                panel.webview.postMessage({ type: "error", message: "This form is built dynamically outside InitializeComponent(); visual changes cannot be saved safely." });
+                return;
+              }
               const openDesigner = findOpenDocument(designerPath);
               if (openDesigner?.isDirty) {
                 if (!message.force) { panel.webview.postMessage({ type: "conflict", reason: "buffer" }); return; }
@@ -124,7 +129,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
       async function loadDesigner(): Promise<void> {
         try {
-          const document = await runRoslyn(context.extensionPath, "read", designerPath);
+          const codeBehindPath = designerPath.toLowerCase() === formPath.toLowerCase() || !(await fileExists(formPath)) ? undefined : formPath;
+          const document = await runRoslyn(context.extensionPath, "read", designerPath, undefined, codeBehindPath);
+          designerReadOnly = document.readOnly === true;
           lastDesignerHash = await fileHash(designerPath);
           panel.webview.postMessage({ type: "load", document, project: path.basename(projectPath) });
         } catch (error) {
@@ -252,10 +259,11 @@ function buildProject(projectPath: string): Promise<string[]> {
   });
 }
 
-function runRoslyn(extensionPath: string, operation: "read" | "write", designerPath: string, payload?: string): Promise<DesignerDocument> {
+function runRoslyn(extensionPath: string, operation: "read" | "write", designerPath: string, payload?: string, codeBehindPath?: string): Promise<DesignerDocument> {
   return new Promise((resolve, reject) => {
     const helper = path.join(extensionPath, "roslyn", "WinFormsDesigner.Roslyn.csproj");
     const args = ["run", "--no-launch-profile", "--project", helper, "--", operation, designerPath];
+    if (operation === "read" && codeBehindPath) args.push(codeBehindPath);
     const child = spawn("dotnet", args, { cwd: extensionPath, windowsHide: true });
     let stdout = "";
     let stderr = "";

@@ -158,3 +158,38 @@ test("Roslyn edits a layout stored in the Form.cs file", async () => {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
 });
+
+test("Roslyn identifies custom-built forms as read-only instead of returning a misleading blank layout", async () => {
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "winforms-custom-layout-test-"));
+  try {
+    const designer = path.join(temporaryRoot, "Form1.Designer.cs");
+    const codeBehind = path.join(temporaryRoot, "Form1.cs");
+    const designerSource = `namespace CustomLayoutSample;\npartial class Form1 : System.Windows.Forms.Form\n{\n    private void InitializeComponent()\n    {\n        this.ClientSize = new System.Drawing.Size(800, 450);\n        this.Text = "Form1";\n    }\n}\n`;
+    const codeBehindSource = `namespace CustomLayoutSample;\npartial class Form1\n{\n    private void InicializarInterface()\n    {\n        this.Text = "Custom form";\n        this.ClientSize = new System.Drawing.Size(1180, 750);\n        var panel = new System.Windows.Forms.Panel { Location = new System.Drawing.Point(30, 114) };\n        this.Controls.Add(panel);\n        panel.Controls.Add(new System.Windows.Forms.Button());\n    }\n}\n`;
+    await writeFile(designer, designerSource);
+    await writeFile(codeBehind, codeBehindSource);
+
+    const result = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "read", designer, codeBehind], {
+      cwd: root,
+      encoding: "utf8"
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const model = JSON.parse(result.stdout);
+    assert.equal(model.readOnly, true);
+    assert.equal(model.controls[0].size.width, 1180);
+    assert.equal(model.controls[0].size.height, 750);
+    assert.equal(model.controls[0].properties.Text, "Custom form");
+    assert.match(model.diagnostics.join(" "), /creates its controls in custom code outside InitializeComponent/);
+
+    const write = spawnSync("dotnet", ["run", "--no-launch-profile", "--project", helper, "--", "write", designer], {
+      cwd: root,
+      input: JSON.stringify(model),
+      encoding: "utf8"
+    });
+    assert.notEqual(write.status, 0);
+    assert.match(write.stderr, /cannot be safely edited by the visual designer/);
+    assert.equal(await readFile(designer, "utf8"), designerSource);
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});

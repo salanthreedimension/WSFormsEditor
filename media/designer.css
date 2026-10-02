@@ -36,6 +36,9 @@ button:hover { border-color: var(--accent); }
 .tree-row.selected { background: var(--accent-soft); outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .tree-icon { color: var(--accent); width: 15px; text-align: center; font-size: 11px; }
 .canvas-wrap { min-width: 0; min-height: 0; overflow: auto; position: relative; background-color: #d8dddc; background-image: radial-gradient(#a9b1ae 0.75px, transparent .75px); background-size: 16px 16px; display: grid; place-items: start center; padding: 34px; }
+.readonly-notice { position: absolute; z-index: 6; top: 50%; left: 50%; width: min(520px, calc(100% - 40px)); padding: 18px 20px; transform: translate(-50%, -50%); border: 1px solid #a66c22; border-radius: 5px; background: #282522f2; color: #f0d4aa; box-shadow: 0 8px 28px #141a1a66; line-height: 1.5; text-align: center; }
+.readonly-notice[hidden] { display: none; }
+.read-only .tool-list, .read-only .properties, .read-only #undo, .read-only #redo { opacity: .55; pointer-events: none; }
 .form-surface { position: relative; flex: none; background: #f4f4f2; color: #1e2423; border: 1px solid #78817e; box-shadow: 0 8px 28px #141a1a55; background-image: radial-gradient(#c7ceca 0.65px, transparent .65px); background-size: 8px 8px; }
 .control { position: absolute; display: flex; align-items: center; justify-content: center; overflow: visible; user-select: none; cursor: move; outline: 1px solid transparent; font-family: "Segoe UI", sans-serif; font-size: 12px; }
 .control.selected { outline: 1px solid #168b70; z-index: 2; }
